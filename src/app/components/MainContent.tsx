@@ -20,6 +20,7 @@ import {
   Minus,
   ArrowUpRight,
   ArrowDownRight,
+  X,
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -127,6 +128,7 @@ The current shift production rate is running 8.2% below the previous shift. Here
 export function MainContent({ sidebarCollapsed, onNavigate }: MainContentProps) {
   const [messages, setMessages] = useState(sampleChatMessages);
   const [inputMessage, setInputMessage] = useState('');
+  const [isCopilotOpen, setIsCopilotOpen] = useState(false);
 
   const handleSendMessage = () => {
     if (inputMessage.trim()) {
@@ -157,11 +159,21 @@ export function MainContent({ sidebarCollapsed, onNavigate }: MainContentProps) 
         <div className="flex-1 overflow-auto">
           <div className="p-6">
             {/* Page Header */}
-            <div className="mb-6">
-              <h2 className="text-2xl font-semibold text-white mb-1">Overview Dashboard</h2>
-              <p className="text-sm text-slate-400">
-                Real-time operational intelligence for production and maintenance
-              </p>
+            <div className="mb-6 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-semibold text-white mb-1">Overview Dashboard</h2>
+                <p className="text-sm text-slate-400">
+                  Real-time operational intelligence for production and maintenance
+                </p>
+              </div>
+              <Button
+                onClick={() => setIsCopilotOpen(true)}
+                className="bg-cyan-500 hover:bg-cyan-600 text-white"
+                size="sm"
+              >
+                <Sparkles className="w-4 h-4 mr-2" />
+                AI Copilot
+              </Button>
             </div>
 
             {/* KPI Snapshot - Enterprise Overview */}
@@ -635,19 +647,35 @@ export function MainContent({ sidebarCollapsed, onNavigate }: MainContentProps) 
         </div>
 
         {/* AI Operations Copilot Panel */}
-        <div className="w-96 border-l border-white/10 bg-[#0f1623] flex flex-col">
+        <div
+          className={`absolute inset-y-0 right-0 z-20 w-96 max-w-[calc(100vw-2rem)] border-l border-white/10 bg-[#0f1623] flex flex-col shadow-2xl shadow-black/40 transition-transform duration-300 ease-out ${
+            isCopilotOpen ? 'translate-x-0' : 'translate-x-full pointer-events-none'
+          }`}
+          aria-hidden={!isCopilotOpen}
+        >
           {/* Copilot Header */}
           <div className="p-4 border-b border-white/10">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="p-2 bg-cyan-500/20 rounded-lg">
-                <Sparkles className="w-5 h-5 text-cyan-400" />
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-cyan-500/20 rounded-lg">
+                  <Sparkles className="w-5 h-5 text-cyan-400" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-white">AI Operations Copilot</h3>
+                  <p className="text-xs text-slate-400">
+                    Your intelligent operations assistant
+                  </p>
+                </div>
               </div>
-              <div>
-                <h3 className="text-sm font-semibold text-white">AI Operations Copilot</h3>
-                <p className="text-xs text-slate-400">
-                  Your intelligent operations assistant
-                </p>
-              </div>
+              <Button
+                onClick={() => setIsCopilotOpen(false)}
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 flex-shrink-0 text-slate-400 hover:bg-[#1e293b] hover:text-white"
+                aria-label="Close AI Copilot"
+              >
+                <X className="w-4 h-4" />
+              </Button>
             </div>
 
             {/* Quick Insights */}

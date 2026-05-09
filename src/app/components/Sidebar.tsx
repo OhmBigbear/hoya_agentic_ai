@@ -121,7 +121,7 @@ export function Sidebar({ collapsed, onToggleCollapse, activePage, onNavigate }:
       </div>
 
       {/* Menu Groups */}
-      <nav className="flex-1 overflow-y-auto py-4">
+      <nav className="flex-1 overflow-y-auto py-4 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-slate-700/60 hover:scrollbar-thumb-slate-600/80 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-700/60 hover:[&::-webkit-scrollbar-thumb]:bg-slate-600/80">
         {menuGroups.map((group, groupIndex) => (
           <div key={group.title} className={groupIndex > 0 ? 'mt-6' : ''}>
             {/* Group Title */}
