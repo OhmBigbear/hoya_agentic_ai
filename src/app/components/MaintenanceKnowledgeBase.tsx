@@ -3,18 +3,24 @@ import {
   FileText,
   Download,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { KnowledgeContextFilters } from '../../features/maintenance-knowledge/components/KnowledgeContextFilters';
 import { MaintenanceCopilotPanel } from '../../features/maintenance-knowledge/components/MaintenanceCopilotPanel';
 import { KnowledgeResourceTabs } from '../../features/maintenance-knowledge/components/KnowledgeResourceTabs';
 import {
-  machineManuals,
-  maintenanceProcedures,
-  historicalRecords,
-  lessonsLearned,
-  sampleChatMessages,
-  type ChatMessage,
-} from '../../features/maintenance-knowledge';
+  getHistoricalRecords,
+  getInitialChatMessages,
+  getLessonsLearned,
+  getMachineManuals,
+  getMaintenanceProcedures,
+} from '../../features/maintenance-knowledge/services/maintenanceKnowledgeApi';
+import type {
+  ChatMessage,
+  HistoricalMaintenanceRecord,
+  LessonLearned,
+  MachineManual,
+  MaintenanceProcedure,
+} from '../../features/maintenance-knowledge/types';
 
 interface MaintenanceKnowledgeBaseProps {
   sidebarCollapsed: boolean;
@@ -24,8 +30,48 @@ interface MaintenanceKnowledgeBaseProps {
 export function MaintenanceKnowledgeBase({ sidebarCollapsed, onNavigate }: MaintenanceKnowledgeBaseProps) {
   const [selectedMachine, setSelectedMachine] = useState('curve-gen-3b');
   const [selectedDocType, setSelectedDocType] = useState('all');
-  const [messages, setMessages] = useState<ChatMessage[]>(sampleChatMessages);
+  const [maintenanceProcedures, setMaintenanceProcedures] = useState<MaintenanceProcedure[]>([]);
+  const [machineManuals, setMachineManuals] = useState<MachineManual[]>([]);
+  const [historicalRecords, setHistoricalRecords] = useState<HistoricalMaintenanceRecord[]>([]);
+  const [lessonsLearned, setLessonsLearned] = useState<LessonLearned[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputMessage, setInputMessage] = useState('');
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadMaintenanceKnowledge() {
+      const [
+        procedures,
+        manuals,
+        records,
+        lessons,
+        initialMessages,
+      ] = await Promise.all([
+        getMaintenanceProcedures(),
+        getMachineManuals(),
+        getHistoricalRecords(),
+        getLessonsLearned(),
+        getInitialChatMessages(),
+      ]);
+
+      if (!isMounted) {
+        return;
+      }
+
+      setMaintenanceProcedures(procedures);
+      setMachineManuals(manuals);
+      setHistoricalRecords(records);
+      setLessonsLearned(lessons);
+      setMessages(initialMessages);
+    }
+
+    void loadMaintenanceKnowledge();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const handleSendMessage = () => {
     if (inputMessage.trim()) {
