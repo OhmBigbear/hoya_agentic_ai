@@ -9,13 +9,13 @@ import { MaintenanceCopilotPanel } from '../../features/maintenance-knowledge/co
 import { KnowledgeResourceTabs } from '../../features/maintenance-knowledge/components/KnowledgeResourceTabs';
 import {
   getHistoricalRecords,
-  getInitialChatMessages,
   getLessonsLearned,
   getMachineManuals,
   getMaintenanceProcedures,
 } from '../../features/maintenance-knowledge/services/maintenanceKnowledgeApi';
+import { useMaintenanceCopilot } from '../../features/maintenance-knowledge/hooks/useMaintenanceCopilot';
+import { useMaintenanceKnowledgeFilters } from '../../features/maintenance-knowledge/hooks/useMaintenanceKnowledgeFilters';
 import type {
-  ChatMessage,
   HistoricalMaintenanceRecord,
   LessonLearned,
   MachineManual,
@@ -28,14 +28,23 @@ interface MaintenanceKnowledgeBaseProps {
 }
 
 export function MaintenanceKnowledgeBase({ sidebarCollapsed, onNavigate }: MaintenanceKnowledgeBaseProps) {
-  const [selectedMachine, setSelectedMachine] = useState('curve-gen-3b');
-  const [selectedDocType, setSelectedDocType] = useState('all');
+  const {
+    selectedMachine,
+    selectedDocType,
+    setSelectedMachine,
+    setSelectedDocType,
+  } = useMaintenanceKnowledgeFilters();
+  const {
+    messages,
+    inputMessage,
+    setInputMessage,
+    handleSendMessage,
+    handleSuggestedQuestionSelect,
+  } = useMaintenanceCopilot();
   const [maintenanceProcedures, setMaintenanceProcedures] = useState<MaintenanceProcedure[]>([]);
   const [machineManuals, setMachineManuals] = useState<MachineManual[]>([]);
   const [historicalRecords, setHistoricalRecords] = useState<HistoricalMaintenanceRecord[]>([]);
   const [lessonsLearned, setLessonsLearned] = useState<LessonLearned[]>([]);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [inputMessage, setInputMessage] = useState('');
 
   useEffect(() => {
     let isMounted = true;
@@ -46,13 +55,11 @@ export function MaintenanceKnowledgeBase({ sidebarCollapsed, onNavigate }: Maint
         manuals,
         records,
         lessons,
-        initialMessages,
       ] = await Promise.all([
         getMaintenanceProcedures(),
         getMachineManuals(),
         getHistoricalRecords(),
         getLessonsLearned(),
-        getInitialChatMessages(),
       ]);
 
       if (!isMounted) {
@@ -63,7 +70,6 @@ export function MaintenanceKnowledgeBase({ sidebarCollapsed, onNavigate }: Maint
       setMachineManuals(manuals);
       setHistoricalRecords(records);
       setLessonsLearned(lessons);
-      setMessages(initialMessages);
     }
 
     void loadMaintenanceKnowledge();
@@ -72,19 +78,6 @@ export function MaintenanceKnowledgeBase({ sidebarCollapsed, onNavigate }: Maint
       isMounted = false;
     };
   }, []);
-
-  const handleSendMessage = () => {
-    if (inputMessage.trim()) {
-      const newMessage = {
-        id: messages.length + 1,
-        role: 'user' as const,
-        content: inputMessage,
-        timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
-      };
-      setMessages([...messages, newMessage]);
-      setInputMessage('');
-    }
-  };
 
   return (
     <main
@@ -140,7 +133,7 @@ export function MaintenanceKnowledgeBase({ sidebarCollapsed, onNavigate }: Maint
             inputMessage={inputMessage}
             onInputMessageChange={setInputMessage}
             onSendMessage={handleSendMessage}
-            onSuggestedQuestionSelect={setInputMessage}
+            onSuggestedQuestionSelect={handleSuggestedQuestionSelect}
           />
         </div>
       </div>
