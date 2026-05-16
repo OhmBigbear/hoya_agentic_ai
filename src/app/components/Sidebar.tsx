@@ -12,6 +12,7 @@ import {
   ChevronRight,
   Activity,
   Package,
+  Boxes,
   TrendingUp,
   Users,
   AlertCircle,
@@ -55,6 +56,7 @@ const menuGroups: MenuGroup[] = [
     items: [
       { label: 'Station Maintenance Tracking', icon: Package, href: '#station-maintenance-tracking' },
       { label: 'Station Maintenance Analysis', icon: TrendingUp, href: '#station-maintenance-analysis' },
+      { label: 'Cost & Spare Parts', icon: Boxes, href: '#maintenance-cost-spare-parts' },
       { label: 'Maintenance Knowledge Base', icon: BookOpen, href: '#maintenance-kb' },
     ],
   },

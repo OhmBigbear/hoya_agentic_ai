@@ -11,6 +11,7 @@ import { ScrapAnalysis } from './components/ScrapAnalysis';
 import { StationMaintenanceTracking } from './components/StationMaintenanceTracking';
 import { StationMaintenanceAnalysis } from './components/StationMaintenanceAnalysis';
 import { MaintenanceKnowledgeBase } from './components/MaintenanceKnowledgeBase';
+import { MaintenanceCostSpareParts } from './components/MaintenanceCostSpareParts';
 import { EngineeringSandbox } from './components/EngineeringSandbox';
 import { AgentsConfiguration } from './components/AgentsConfiguration';
 import { RawDataExplorer } from './components/RawDataExplorer';
@@ -54,6 +55,8 @@ export default function App() {
         return <StationMaintenanceTracking sidebarCollapsed={sidebarCollapsed} onNavigate={handleNavigate} />;
       case '#station-maintenance-analysis':
         return <StationMaintenanceAnalysis sidebarCollapsed={sidebarCollapsed} onNavigate={handleNavigate} />;
+      case '#maintenance-cost-spare-parts':
+        return <MaintenanceCostSpareParts sidebarCollapsed={sidebarCollapsed} />;
       case '#maintenance-kb':
         return <MaintenanceKnowledgeBase sidebarCollapsed={sidebarCollapsed} onNavigate={handleNavigate} />;
       case '#engineering-sandbox':
