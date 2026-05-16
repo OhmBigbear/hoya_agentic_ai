@@ -1,3 +1,6 @@
+import { agenticCoreClient } from '../../../shared/api/agenticCoreClient';
+import { API_ENDPOINTS } from '../../../shared/api/endpoints';
+import { APP_MODE } from '../../../shared/config/env';
 import {
   historicalRecords,
   lessonsLearned,
@@ -218,6 +221,10 @@ export async function getInitialChatMessages(): Promise<MaintenanceChatResponseD
 export async function searchKnowledgeDocuments(
   request: KBDocumentSearchRequestDto,
 ): Promise<KBDocumentSearchResponseDto> {
+  if (APP_MODE !== 'mock') {
+    return agenticCoreClient.get<KBDocumentSearchResponseDto>(API_ENDPOINTS.KB_DOCUMENTS, request);
+  }
+
   const offset = Math.max(request.offset ?? 0, 0);
   const limit = Math.max(request.limit ?? DEFAULT_SEARCH_LIMIT, 1);
   const documentTypes = request.documentTypes ?? [];
@@ -237,6 +244,10 @@ export async function searchKnowledgeDocuments(
 }
 
 export async function sendMaintenanceChatMessage(request: KBChatRequestDto): Promise<KBChatResponseDto> {
+  if (APP_MODE !== 'mock') {
+    return agenticCoreClient.post<KBChatResponseDto>(API_ENDPOINTS.KB_CHAT, request);
+  }
+
   const conversationId = request.conversationId ?? 'mock-conversation-maintenance-kb';
   const normalizedMessage = request.message.trim().toLowerCase();
   const isSafetyQuestion = normalizedMessage.includes('safety') || normalizedMessage.includes('warning');
@@ -260,6 +271,10 @@ export async function sendMaintenanceChatMessage(request: KBChatRequestDto): Pro
 export async function getMaintenanceKnowledgeContext(
   request: KBContextRequestDto = {},
 ): Promise<KBContextResponseDto> {
+  if (APP_MODE !== 'mock') {
+    return agenticCoreClient.get<KBContextResponseDto>(API_ENDPOINTS.KB_CONTEXT, request);
+  }
+
   return {
     selected: request,
     machines: [
@@ -296,6 +311,10 @@ export async function getMaintenanceKnowledgeContext(
 export async function submitMaintenanceFeedback(
   request: KBFeedbackRequestDto,
 ): Promise<KBFeedbackResponseDto> {
+  if (APP_MODE !== 'mock') {
+    return agenticCoreClient.post<KBFeedbackResponseDto>(API_ENDPOINTS.KB_FEEDBACK, request);
+  }
+
   return {
     accepted: true,
     feedbackId: `mock-feedback-${request.messageId}-${request.rating}`,
