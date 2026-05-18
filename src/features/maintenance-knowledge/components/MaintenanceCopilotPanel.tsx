@@ -31,9 +31,9 @@ export function MaintenanceCopilotPanel({
   const selectedMachineLabel = machineLabels[selectedMachine] ?? selectedMachine.toUpperCase();
 
   return (
-    <div className="flex-1 flex flex-col bg-[#0f1623]">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#0f1623]">
       {/* Copilot Header */}
-      <div className="p-6 border-b border-white/10">
+      <div className="shrink-0 p-6 border-b border-white/10">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-cyan-500/20 rounded-lg">
             <Sparkles className="w-6 h-6 text-cyan-400" />
@@ -70,7 +70,7 @@ export function MaintenanceCopilotPanel({
       <ChatMessageList messages={messages} />
 
       {/* Chat Input Area */}
-      <div className="p-6 border-t border-white/10">
+      <div className="shrink-0 p-6 border-t border-white/10">
         {/* Suggested Questions */}
         <SuggestedQuestions onSuggestedQuestionSelect={onSuggestedQuestionSelect} />
 
