@@ -50,14 +50,18 @@ export function MaintenanceKnowledgeBasePage({
   const [isContextLoading, setIsContextLoading] = useState(true);
   const [isSearchLoading, setIsSearchLoading] = useState(false);
   const [isAssistantLoading, setIsAssistantLoading] = useState(false);
+  const [contextError, setContextError] = useState<string | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [assistantError, setAssistantError] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | undefined>();
+  const [traceId, setTraceId] = useState<string | undefined>();
 
   useEffect(() => {
     let isMounted = true;
 
     async function loadContext() {
       setIsContextLoading(true);
+      setContextError(null);
       try {
         const response = await getMaintenanceKbContext();
         if (!isMounted) {
@@ -65,6 +69,12 @@ export function MaintenanceKnowledgeBasePage({
         }
         setContext(response);
         setFilters(response.selected);
+        setTraceId(response.trace_id);
+      } catch (error) {
+        if (isMounted) {
+          setContext(null);
+          setContextError(error instanceof Error ? error.message : 'Unable to load maintenance knowledge context.');
+        }
       } finally {
         if (isMounted) {
           setIsContextLoading(false);
@@ -127,8 +137,12 @@ export function MaintenanceKnowledgeBasePage({
       const response = await askMaintenanceKbAssistant({
         question: trimmedQuestion,
         context: filters,
+        conversation_id: conversationId,
+        trace_id: traceId,
       });
       setAssistantResponse(response);
+      setConversationId(response.conversation_id ?? conversationId);
+      setTraceId(response.trace_id ?? traceId);
     } catch (error) {
       setAssistantResponse(null);
       setAssistantError(error instanceof Error ? error.message : 'Unable to get assistant response.');
@@ -169,7 +183,7 @@ export function MaintenanceKnowledgeBasePage({
           <div className="flex flex-1 items-center justify-center p-6">
             <div className="rounded-md border border-red-500/25 bg-red-500/10 p-4 text-red-100">
               <AlertTriangle className="mb-2 h-5 w-5" />
-              Unable to load maintenance knowledge context.
+              {contextError ?? 'Unable to load maintenance knowledge context.'}
             </div>
           </div>
         ) : (
@@ -182,7 +196,7 @@ export function MaintenanceKnowledgeBasePage({
               question={question}
               isLoading={isAssistantLoading}
               error={assistantError}
-              relatedHistory={relatedHistory}
+              relatedHistory={assistantResponse?.related_history ?? relatedHistory}
               onQuestionChange={setQuestion}
               onSendQuestion={handleSendQuestion}
               onSelectQuestion={handleSelectSuggestedQuestion}

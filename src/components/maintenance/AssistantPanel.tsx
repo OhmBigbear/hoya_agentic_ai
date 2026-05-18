@@ -1,4 +1,4 @@
-import { AlertCircle, Bot, Loader2, Send, ShieldAlert, Sparkles } from 'lucide-react';
+import { AlertCircle, Bot, FileWarning, Info, Loader2, Send, ShieldAlert, Sparkles } from 'lucide-react';
 import { FormEvent } from 'react';
 import { Badge } from '../../app/components/ui/badge';
 import { Button } from '../../app/components/ui/button';
@@ -101,10 +101,16 @@ export function AssistantPanel({
               <p className="whitespace-pre-line text-sm leading-6 text-slate-200">{response.answer}</p>
             </div>
 
+            <GovernanceBlock response={response} />
             <ConfidenceBlock response={response} />
+            <MetadataBlock response={response} />
             <SourceReferencePanel sources={response.sources} />
             <SuggestedQuestions questions={response.suggested_questions} onSelectQuestion={onSelectQuestion} />
-            <RelatedHistoryPanel history={relatedHistory} relatedDocuments={response.related_documents} />
+            <RelatedHistoryPanel
+              history={relatedHistory}
+              relatedDocuments={response.related_documents}
+              similarCases={response.similar_cases ?? []}
+            />
           </div>
         ) : (
           <div className="flex min-h-[180px] items-center justify-center rounded-md border border-dashed border-white/10 bg-[#101827] p-6 text-center">
@@ -142,6 +148,7 @@ export function AssistantPanel({
 }
 
 function ConfidenceBlock({ response }: { response: MaintenanceKbChatResponse }) {
+  const hasNoEvidence = response.confidence_label === 'no_evidence' || response.evidence_satisfied === false;
   const isLowConfidence = response.confidence_label === 'low' || response.confidence < 70;
 
   return (
@@ -154,6 +161,18 @@ function ConfidenceBlock({ response }: { response: MaintenanceKbChatResponse }) 
       </div>
       <Progress value={response.confidence} className="bg-slate-800 [&>div]:bg-cyan-400" />
       <div className="mt-2 text-sm font-semibold text-white">{response.confidence}%</div>
+      {hasNoEvidence ? (
+        <div className="mt-2 flex gap-2 rounded-md border border-amber-500/25 bg-amber-500/10 p-2 text-xs text-amber-100">
+          <FileWarning className="h-4 w-4 shrink-0" />
+          <span>No evidence is available for the selected context. Treat this as restricted guidance.</span>
+        </div>
+      ) : null}
+      {isLowConfidence && !hasNoEvidence ? (
+        <div className="mt-2 flex gap-2 rounded-md border border-amber-500/25 bg-amber-500/10 p-2 text-xs text-amber-100">
+          <ShieldAlert className="h-4 w-4 shrink-0" />
+          <span>Low confidence: verify against official procedures before acting.</span>
+        </div>
+      ) : null}
       {response.warnings.map((warning) => (
         <div key={warning} className="mt-2 flex gap-2 rounded-md border border-amber-500/25 bg-amber-500/10 p-2 text-xs text-amber-100">
           <ShieldAlert className="h-4 w-4 shrink-0" />
@@ -162,6 +181,81 @@ function ConfidenceBlock({ response }: { response: MaintenanceKbChatResponse }) 
       ))}
     </div>
   );
+}
+
+function GovernanceBlock({ response }: { response: MaintenanceKbChatResponse }) {
+  const shouldRender =
+    response.safety_critical ||
+    response.restricted_guidance ||
+    response.evidence_required ||
+    response.official_source_required ||
+    response.governance_flags?.length;
+
+  if (!shouldRender) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-md border border-amber-500/25 bg-amber-500/10 p-3 text-sm text-amber-100">
+      <div className="mb-2 flex items-center gap-2 font-medium">
+        <ShieldAlert className="h-4 w-4" />
+        Safety / Evidence Controls
+      </div>
+      <div className="flex flex-wrap gap-2 text-xs">
+        {response.safety_critical ? <Badge className="border-red-500/30 bg-red-500/15 text-red-100">Safety critical</Badge> : null}
+        {response.safety_category ? <Badge className="border-amber-500/30 bg-amber-500/15 text-amber-100">{response.safety_category}</Badge> : null}
+        {response.evidence_required ? (
+          <Badge className={response.evidence_satisfied ? 'border-green-500/30 bg-green-500/15 text-green-100' : 'border-red-500/30 bg-red-500/15 text-red-100'}>
+            Evidence {response.evidence_satisfied ? 'satisfied' : 'required'}
+          </Badge>
+        ) : null}
+        {response.restricted_guidance ? <Badge className="border-red-500/30 bg-red-500/15 text-red-100">Restricted guidance</Badge> : null}
+        {response.official_source_required ? <Badge className="border-cyan-500/30 bg-cyan-500/15 text-cyan-100">Official source required</Badge> : null}
+        {response.governance_flags?.map((flag) => (
+          <Badge key={flag} className="border-white/10 bg-white/5 text-slate-200">{flag}</Badge>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MetadataBlock({ response }: { response: MaintenanceKbChatResponse }) {
+  const retrievalSummary = summarizeMetadata(response.retrieval_metadata);
+
+  if (!response.trace_id && !response.conversation_id && !retrievalSummary) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-md border border-white/10 bg-[#101827] p-3 text-xs text-slate-400">
+      <div className="mb-2 flex items-center gap-2 font-semibold uppercase">
+        <Info className="h-3.5 w-3.5" />
+        Response Metadata
+      </div>
+      <div className="space-y-1">
+        {response.trace_id ? <div><span className="text-slate-500">Trace:</span> {response.trace_id}</div> : null}
+        {response.conversation_id ? <div><span className="text-slate-500">Conversation:</span> {response.conversation_id}</div> : null}
+        {retrievalSummary ? <div><span className="text-slate-500">Retrieval:</span> {retrievalSummary}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+function summarizeMetadata(metadata: Record<string, unknown> | undefined): string {
+  if (!metadata) {
+    return '';
+  }
+
+  const preferredKeys = ['mode', 'returned', 'top_k', 'sources', 'retrieval_count', 'latency_ms'];
+  const summary = preferredKeys
+    .filter((key) => metadata[key] !== undefined)
+    .map((key) => `${key}: ${String(metadata[key])}`);
+
+  if (summary.length > 0) {
+    return summary.join(', ');
+  }
+
+  return Object.keys(metadata).slice(0, 4).join(', ');
 }
 
 function getOptionLabel(options: Array<{ id: string; label: string }> | undefined, value: string | undefined): string {
