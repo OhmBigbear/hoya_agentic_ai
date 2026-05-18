@@ -56,7 +56,20 @@ globalThis.fetch = async (url, init = {}) => {
       answer: 'Use the approved bearing replacement procedure and verify LOTO before work.',
       confidence: 0.61,
       confidence_label: 'low',
-      sources: [],
+      sources: [
+        {
+          source_id: 'src-kb-mnt-045-step-4',
+          kb_id: 'KB-MNT-045',
+          title: 'Precision Bearing Replacement Protocol',
+          document_type: 'sop',
+          version: 'v2.3',
+          section: 'Installation and Verification',
+          page: 8,
+          updated_at: '2026-01-08',
+          source_ref: 'SOP KB-MNT-045, step 4.2 and 5.1',
+          relevance_score: 0.96,
+        },
+      ],
       related_documents: [],
       suggested_questions: ['Show maintenance history'],
       warnings: ['Low confidence: evidence is limited.'],
@@ -172,6 +185,9 @@ try {
   assert.equal(searchResponse.trace_id, 'trace-search-1');
   assert.equal(chatResponse.trace_id, 'trace-chat-1');
   assert.equal(chatResponse.conversation_id, 'conversation-1');
+  assert.equal(chatResponse.confidence, 61);
+  assert.equal(chatResponse.sources[0].source_id, 'src-kb-mnt-045-step-4');
+  assert.equal(chatResponse.sources[0].relevance_score, 96);
   assert.equal(chatResponse.related_history?.[0].id, 'MWO-2401-032');
   assert.equal(chatResponse.safety_critical, true);
   assert.equal(chatResponse.restricted_guidance, true);
@@ -229,6 +245,10 @@ try {
     onSelectQuestion: () => {},
   }));
   assert.match(assistantHtml, /AI Maintenance Knowledge Assistant/);
+  assert.match(assistantHtml, /Use the approved bearing replacement procedure/);
+  assert.match(assistantHtml, /61%/);
+  assert.match(assistantHtml, /Source References/);
+  assert.match(assistantHtml, /SOP KB-MNT-045, step 4\.2 and 5\.1/);
   assert.match(assistantHtml, /Safety \/ Evidence Controls/);
   assert.match(assistantHtml, /Restricted guidance/);
   assert.match(assistantHtml, /Trace:/);
@@ -258,6 +278,7 @@ try {
 }
 
 process.env.VITE_MAINTENANCE_KB_USE_MOCK = 'true';
+const fetchCallCountBeforeMock = fetchCalls.length;
 const mockServer = await createServer({
   appType: 'custom',
   server: {
@@ -286,6 +307,7 @@ try {
   assert.equal(searchResponse.items[0].kb_id, 'KB-MNT-045');
   assert.equal(chatResponse.trace_id, 'mock-trace-chat');
   assert.equal(chatResponse.evidence_satisfied, true);
+  assert.equal(fetchCalls.length, fetchCallCountBeforeMock);
 } finally {
   await mockServer.close();
 }

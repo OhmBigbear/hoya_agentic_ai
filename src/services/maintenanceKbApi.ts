@@ -310,6 +310,23 @@ function normalizeDocument(item: Partial<MaintenanceKbSearchResult>): Maintenanc
   };
 }
 
+function normalizeSource(source: Partial<MaintenanceKbSourceReference>, index: number): MaintenanceKbSourceReference {
+  const kbId = String(source.kb_id ?? source.source_id ?? `source-${index + 1}`);
+
+  return {
+    source_id: String(source.source_id ?? `${kbId}-${index + 1}`),
+    kb_id: kbId,
+    title: String(source.title ?? 'Untitled source'),
+    document_type: (source.document_type ?? 'manual') as Exclude<MaintenanceKbDocumentType, 'all'>,
+    version: source.version ? String(source.version) : undefined,
+    section: source.section ? String(source.section) : undefined,
+    page: typeof source.page === 'number' ? source.page : undefined,
+    updated_at: source.updated_at ? String(source.updated_at) : undefined,
+    source_ref: String(source.source_ref ?? 'Source reference unavailable'),
+    relevance_score: source.relevance_score === undefined ? undefined : normalizeScore(source.relevance_score),
+  };
+}
+
 function normalizeSuggestedQuestion(question: MaintenanceKbSuggestedQuestion | string, index: number): MaintenanceKbSuggestedQuestion {
   if (typeof question === 'string') {
     return {
@@ -327,7 +344,7 @@ function normalizeChatResponse(response: Partial<MaintenanceKbChatResponse>): Ma
     answer: String(response.answer ?? ''),
     confidence: normalizeScore(response.confidence),
     confidence_label: (response.confidence_label ?? 'no_evidence') as MaintenanceKbConfidenceLabel,
-    sources: response.sources ?? [],
+    sources: (response.sources ?? []).map(normalizeSource),
     related_documents: (response.related_documents ?? []).map(normalizeDocument),
     suggested_questions: (response.suggested_questions ?? []).map(normalizeSuggestedQuestion),
     warnings: response.warnings ?? [],
