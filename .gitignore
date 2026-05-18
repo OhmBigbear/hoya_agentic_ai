@@ -8,3 +8,4 @@ dist/
 .idea/
 *.log
 .aider*
+*.tar.gz

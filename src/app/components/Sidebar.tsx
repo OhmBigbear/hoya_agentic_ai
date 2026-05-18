@@ -107,7 +107,7 @@ export function Sidebar({ collapsed, onToggleCollapse, activePage, onNavigate }:
       {/* Sidebar Header */}
       <div className="h-16 flex items-center justify-between px-4 border-b border-slate-700">
         {!collapsed && (
-          <span className="text-sm font-semibold text-slate-100">Hoya Agentic AI</span>
+          <span className="text-sm font-semibold text-slate-100">Agentic MES AI</span>
         )}
         <button
           onClick={onToggleCollapse}
