@@ -1,19 +1,29 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { AssistantPanel } from '../../components/maintenance/AssistantPanel';
+import { DocumentManagementPanel } from '../../components/maintenance/DocumentManagementPanel';
 import { DocumentResultList } from '../../components/maintenance/DocumentResultList';
 import { FilterPanel } from '../../components/maintenance/FilterPanel';
 import {
   askMaintenanceKbAssistant,
+  getDocumentDiagnostics,
   getMaintenanceKbContext,
+  ingestDocument,
+  listDocuments,
   searchMaintenanceKbDocuments,
+  uploadDocument,
 } from '../../services/maintenanceKbApi';
 import type {
+  DiagnosticsResponse,
+  DocumentManifest,
+  IngestResponse,
   MaintenanceKbChatResponse,
   MaintenanceKbContext,
+  MaintenanceKbDocumentMetadata,
   MaintenanceKbRelatedHistoryItem,
   MaintenanceKbSearchRequest,
   MaintenanceKbSearchResult,
+  UploadResponse,
 } from '../../types/maintenanceKb';
 
 interface MaintenanceKnowledgeBasePageProps {
@@ -45,14 +55,26 @@ export function MaintenanceKnowledgeBasePage({
   const [context, setContext] = useState<MaintenanceKbContext | null>(null);
   const [filters, setFilters] = useState<MaintenanceKbSearchRequest>({});
   const [documents, setDocuments] = useState<MaintenanceKbSearchResult[]>([]);
+  const [documentManifests, setDocumentManifests] = useState<DocumentManifest[]>([]);
   const [question, setQuestion] = useState('How should we replace the CURVE-GEN-3B spindle bearing?');
   const [assistantResponse, setAssistantResponse] = useState<MaintenanceKbChatResponse | null>(null);
+  const [uploadResult, setUploadResult] = useState<UploadResponse | null>(null);
+  const [ingestResult, setIngestResult] = useState<IngestResponse | null>(null);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticsResponse | null>(null);
   const [isContextLoading, setIsContextLoading] = useState(true);
   const [isSearchLoading, setIsSearchLoading] = useState(false);
   const [isAssistantLoading, setIsAssistantLoading] = useState(false);
+  const [isDocumentsLoading, setIsDocumentsLoading] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isIngesting, setIsIngesting] = useState(false);
+  const [isDiagnosticsLoading, setIsDiagnosticsLoading] = useState(false);
   const [contextError, setContextError] = useState<string | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [assistantError, setAssistantError] = useState<string | null>(null);
+  const [documentError, setDocumentError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [ingestError, setIngestError] = useState<string | null>(null);
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [traceId, setTraceId] = useState<string | undefined>();
 
@@ -88,6 +110,29 @@ export function MaintenanceKnowledgeBasePage({
       isMounted = false;
     };
   }, []);
+
+  const refreshDocuments = async () => {
+    setIsDocumentsLoading(true);
+    setDocumentError(null);
+    try {
+      const response = await listDocuments(filters);
+      setDocumentManifests(response);
+    } catch (error) {
+      setDocumentManifests([]);
+      setDocumentError(error instanceof Error ? error.message : 'Unable to load uploaded maintenance documents.');
+    } finally {
+      setIsDocumentsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!context) {
+      return;
+    }
+
+    void refreshDocuments();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [context]);
 
   useEffect(() => {
     if (!context) {
@@ -156,6 +201,50 @@ export function MaintenanceKnowledgeBasePage({
     setAssistantError(null);
   };
 
+  const handleUpload = async (file: File, metadata: MaintenanceKbDocumentMetadata) => {
+    setIsUploading(true);
+    setUploadError(null);
+    try {
+      const response = await uploadDocument(file, metadata);
+      setUploadResult(response);
+      await refreshDocuments();
+    } catch (error) {
+      setUploadResult(null);
+      setUploadError(error instanceof Error ? error.message : 'Unable to upload maintenance document.');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleIngest = async (documentId: string) => {
+    setIsIngesting(true);
+    setIngestError(null);
+    try {
+      const response = await ingestDocument(documentId);
+      setIngestResult(response);
+      await refreshDocuments();
+    } catch (error) {
+      setIngestResult(null);
+      setIngestError(error instanceof Error ? error.message : 'Unable to ingest maintenance document.');
+    } finally {
+      setIsIngesting(false);
+    }
+  };
+
+  const handleDiagnostics = async (documentId: string) => {
+    setIsDiagnosticsLoading(true);
+    setDiagnosticsError(null);
+    try {
+      const response = await getDocumentDiagnostics(documentId);
+      setDiagnostics(response);
+    } catch (error) {
+      setDiagnostics(null);
+      setDiagnosticsError(error instanceof Error ? error.message : 'Diagnostics unavailable for this document.');
+    } finally {
+      setIsDiagnosticsLoading(false);
+    }
+  };
+
   return (
     <main
       className="fixed bottom-0 right-0 top-16 overflow-hidden bg-[#0a0f1e] transition-all duration-300"
@@ -188,7 +277,29 @@ export function MaintenanceKnowledgeBasePage({
           </div>
         ) : (
           <div className="flex min-h-0 flex-1 overflow-hidden">
-            <DocumentResultList documents={documents} isLoading={isContextLoading || isSearchLoading} error={searchError} />
+            <section className="flex min-h-0 flex-1 flex-col border-r border-white/10">
+              <DocumentManagementPanel
+                documents={documentManifests}
+                diagnostics={diagnostics}
+                ingestResult={ingestResult}
+                uploadResult={uploadResult}
+                isLoadingDocuments={isDocumentsLoading}
+                isUploading={isUploading}
+                isIngesting={isIngesting}
+                isLoadingDiagnostics={isDiagnosticsLoading}
+                documentError={documentError}
+                uploadError={uploadError}
+                ingestError={ingestError}
+                diagnosticsError={diagnosticsError}
+                onUpload={handleUpload}
+                onIngest={handleIngest}
+                onDiagnostics={handleDiagnostics}
+                onRefresh={refreshDocuments}
+                searchFilters={filters}
+                onSearchFiltersChange={setFilters}
+              />
+              <DocumentResultList documents={documents} isLoading={isContextLoading || isSearchLoading} error={searchError} />
+            </section>
             <AssistantPanel
               context={contextForPanel}
               filters={filters}

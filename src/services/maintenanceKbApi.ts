@@ -1,9 +1,13 @@
 import type {
+  DiagnosticsResponse,
+  DocumentManifest,
+  IngestResponse,
   MaintenanceKbChatRequest,
   MaintenanceKbChatResponse,
   MaintenanceKbConfidenceLabel,
   MaintenanceKbContext,
   MaintenanceKbDocumentType,
+  MaintenanceKbDocumentMetadata,
   MaintenanceKbRelatedHistoryItem,
   MaintenanceKbSearchRequest,
   MaintenanceKbSearchResponse,
@@ -11,12 +15,15 @@ import type {
   MaintenanceKbSimilarCaseItem,
   MaintenanceKbSourceReference,
   MaintenanceKbSuggestedQuestion,
+  UploadResponse,
 } from '../types/maintenanceKb';
 
 const DEFAULT_API_BASE_URL = 'http://localhost:8100';
 const REQUEST_TIMEOUT_MS = 12_000;
 const MAINTENANCE_KB_ENDPOINTS = {
   context: '/api/maintenance/kb/context',
+  documents: '/api/maintenance/kb/documents',
+  upload: '/api/maintenance/kb/documents/upload',
   search: '/api/maintenance/kb/search',
   chat: '/api/maintenance/kb/chat',
 } as const;
@@ -168,6 +175,8 @@ type ChatApiRequest = {
   trace_id?: string;
 };
 
+type QueryParams = Record<string, string | number | boolean | undefined>;
+
 function getApiBaseUrl(): string {
   return (import.meta.env.VITE_AGENTIC_CORE_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/+$/, '');
 }
@@ -182,20 +191,27 @@ function waitForMockLatency(): Promise<void> {
   });
 }
 
-function buildUrl(path: string): string {
-  return `${getApiBaseUrl()}${path}`;
+function buildUrl(path: string, params?: QueryParams): string {
+  const url = new URL(`${getApiBaseUrl()}${path}`);
+  Object.entries(params ?? {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== '') {
+      url.searchParams.set(key, String(value));
+    }
+  });
+  return url.toString();
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+async function requestJson<T>(path: string, init?: RequestInit, params?: QueryParams): Promise<T> {
   const controller = new AbortController();
   const timeoutId = globalThis.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const isFormData = init?.body instanceof FormData;
 
   try {
-    const response = await fetch(buildUrl(path), {
+    const response = await fetch(buildUrl(path, params), {
       ...init,
       headers: {
         Accept: 'application/json',
-        ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+        ...(init?.body && !isFormData ? { 'Content-Type': 'application/json' } : {}),
         ...init?.headers,
       },
       signal: controller.signal,
@@ -297,33 +313,170 @@ function normalizeScore(score: unknown): number {
   return score > 0 && score <= 1 ? Math.round(score * 100) : Math.round(score);
 }
 
-function normalizeDocument(item: Partial<MaintenanceKbSearchResult>): MaintenanceKbSearchResult {
+function toStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(String).filter(Boolean);
+  }
+
+  if (typeof value === 'string') {
+    return value
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+function getRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
+}
+
+function getString(record: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (value !== undefined && value !== null && value !== '') {
+      return String(value);
+    }
+  }
+  return undefined;
+}
+
+function getNumber(record: Record<string, unknown>, ...keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'number' && !Number.isNaN(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function normalizeDocument(item: Partial<MaintenanceKbSearchResult> & Record<string, unknown>): MaintenanceKbSearchResult {
+  const metadata = getRecord(item.metadata);
+
   return {
-    kb_id: String(item.kb_id ?? ''),
-    title: String(item.title ?? 'Untitled maintenance document'),
-    match_score: normalizeScore(item.match_score),
-    document_type: (item.document_type ?? 'manual') as Exclude<MaintenanceKbDocumentType, 'all'>,
-    version: String(item.version ?? 'n/a'),
-    updated_at: String(item.updated_at ?? 'n/a'),
-    source_ref: String(item.source_ref ?? 'Source reference unavailable'),
-    summary: item.summary,
+    kb_id: String(item.kb_id ?? item.document_id ?? item.source_id ?? ''),
+    title: String(item.title ?? metadata.title ?? 'Untitled maintenance document'),
+    match_score: normalizeScore(item.match_score ?? item.score ?? item.relevance_score),
+    document_type: (item.document_type ?? metadata.document_type ?? 'manual') as Exclude<MaintenanceKbDocumentType, 'all'>,
+    version: String(item.version ?? metadata.version ?? 'n/a'),
+    updated_at: String(item.updated_at ?? item.uploaded_at ?? 'n/a'),
+    source_ref: String(item.source_ref ?? item.source ?? item.filename ?? 'Source reference unavailable'),
+    summary: typeof item.summary === 'string' ? item.summary : undefined,
+    excerpt: typeof item.excerpt === 'string' ? item.excerpt : undefined,
+    source_origin: getString(item, 'source_origin') ?? getString(metadata, 'source_origin'),
+    metadata,
   };
 }
 
-function normalizeSource(source: Partial<MaintenanceKbSourceReference>, index: number): MaintenanceKbSourceReference {
-  const kbId = String(source.kb_id ?? source.source_id ?? `source-${index + 1}`);
+function normalizeSource(source: Partial<MaintenanceKbSourceReference> & Record<string, unknown>, index: number): MaintenanceKbSourceReference {
+  const metadata = getRecord(source.metadata);
+  const kbId = String(source.kb_id ?? source.document_id ?? source.source_id ?? `source-${index + 1}`);
+  const score = source.relevance_score ?? source.score ?? source.match_score;
 
   return {
     source_id: String(source.source_id ?? `${kbId}-${index + 1}`),
     kb_id: kbId,
     title: String(source.title ?? 'Untitled source'),
-    document_type: (source.document_type ?? 'manual') as Exclude<MaintenanceKbDocumentType, 'all'>,
+    document_type: (source.document_type ?? metadata.document_type ?? 'manual') as Exclude<MaintenanceKbDocumentType, 'all'>,
     version: source.version ? String(source.version) : undefined,
     section: source.section ? String(source.section) : undefined,
     page: typeof source.page === 'number' ? source.page : undefined,
     updated_at: source.updated_at ? String(source.updated_at) : undefined,
     source_ref: String(source.source_ref ?? 'Source reference unavailable'),
-    relevance_score: source.relevance_score === undefined ? undefined : normalizeScore(source.relevance_score),
+    excerpt: typeof source.excerpt === 'string' ? source.excerpt : undefined,
+    source_origin: getString(source, 'source_origin') ?? getString(metadata, 'source_origin'),
+    relevance_score: score === undefined ? undefined : normalizeScore(score),
+    score: score === undefined ? undefined : normalizeScore(score),
+  };
+}
+
+function normalizeManifest(item: unknown): DocumentManifest {
+  const record = getRecord(item);
+  const metadata = getRecord(record.metadata);
+
+  return {
+    document_id: String(record.document_id ?? record.id ?? metadata.document_id ?? ''),
+    title: String(record.title ?? metadata.title ?? record.filename ?? 'Untitled maintenance document'),
+    filename: String(record.filename ?? record.file_name ?? metadata.filename ?? 'Unknown file'),
+    status: String(record.status ?? record.manifest_status ?? 'uploaded'),
+    document_type: (record.document_type ?? metadata.document_type ?? 'troubleshooting') as Exclude<MaintenanceKbDocumentType, 'all'>,
+    line: getString(record, 'line', 'production_line') ?? getString(metadata, 'line', 'production_line'),
+    station: getString(record, 'station') ?? getString(metadata, 'station'),
+    machine: getString(record, 'machine') ?? getString(metadata, 'machine'),
+    failure_type: getString(record, 'failure_type') ?? getString(metadata, 'failure_type'),
+    knowledge_category: getString(record, 'knowledge_category') ?? getString(metadata, 'knowledge_category'),
+    criticality: getString(record, 'criticality') ?? getString(metadata, 'criticality'),
+    language: getString(record, 'language') ?? getString(metadata, 'language'),
+    version: getString(record, 'version') ?? getString(metadata, 'version'),
+    owner: getString(record, 'owner') ?? getString(metadata, 'owner'),
+    effective_date: getString(record, 'effective_date') ?? getString(metadata, 'effective_date'),
+    uploaded_at: getString(record, 'uploaded_at', 'created_at'),
+    updated_at: getString(record, 'updated_at'),
+    source_origin: getString(record, 'source_origin') ?? getString(metadata, 'source_origin'),
+    checksum: getString(record, 'checksum'),
+    warnings: toStringArray(record.warnings),
+    metadata,
+  };
+}
+
+function normalizeUploadResponse(response: unknown): UploadResponse {
+  const record = getRecord(response);
+  const manifest = record.manifest ? normalizeManifest(record.manifest) : undefined;
+
+  return {
+    document_id: String(record.document_id ?? manifest?.document_id ?? record.id ?? ''),
+    manifest,
+    status: getString(record, 'status'),
+    warnings: toStringArray(record.warnings),
+    trace_id: getString(record, 'trace_id'),
+  };
+}
+
+function normalizeIngestResponse(response: unknown, documentId: string): IngestResponse {
+  const record = getRecord(response);
+  const rawSteps = Array.isArray(record.steps) ? record.steps : ['parse', 'chunk', 'index', 'activate'].map((step) => ({
+    step,
+    status: record.status ?? 'completed',
+  }));
+
+  return {
+    document_id: String(record.document_id ?? documentId),
+    status: String(record.status ?? 'active'),
+    steps: rawSteps.map((item) => {
+      const stepRecord = getRecord(item);
+      return {
+        step: String(stepRecord.step ?? stepRecord.name ?? 'step'),
+        status: String(stepRecord.status ?? 'completed'),
+        message: getString(stepRecord, 'message'),
+        warnings: toStringArray(stepRecord.warnings),
+      };
+    }),
+    manifest: record.manifest ? normalizeManifest(record.manifest) : undefined,
+    warnings: toStringArray(record.warnings),
+    trace_id: getString(record, 'trace_id'),
+  };
+}
+
+function normalizeDiagnosticsResponse(response: unknown, documentId: string): DiagnosticsResponse {
+  const record = getRecord(response);
+
+  return {
+    document_id: String(record.document_id ?? documentId),
+    manifest_status: getString(record, 'manifest_status', 'status'),
+    file_exists: typeof record.file_exists === 'boolean' ? record.file_exists : undefined,
+    parsed_exists: typeof record.parsed_exists === 'boolean' ? record.parsed_exists : undefined,
+    chunks_exists: typeof record.chunks_exists === 'boolean' ? record.chunks_exists : undefined,
+    indexed: typeof record.indexed === 'boolean' ? record.indexed : undefined,
+    active: typeof record.active === 'boolean' ? record.active : undefined,
+    checksum: getString(record, 'checksum'),
+    vector_count: getNumber(record, 'vector_count'),
+    source_origin: getString(record, 'source_origin'),
+    trace_id: getString(record, 'trace_id'),
+    warnings: toStringArray(record.warnings),
+    indexing_metadata: getRecord(record.indexing_metadata),
+    manifest: record.manifest ? normalizeManifest(record.manifest) : undefined,
   };
 }
 
@@ -373,6 +526,65 @@ export async function getMaintenanceKbContext(): Promise<MaintenanceKbContext> {
   return requestJson<MaintenanceKbContext>(MAINTENANCE_KB_ENDPOINTS.context, { method: 'GET' });
 }
 
+export async function uploadDocument(file: File, metadata: MaintenanceKbDocumentMetadata): Promise<UploadResponse> {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('metadata', JSON.stringify(metadata));
+  Object.entries(metadata).forEach(([key, value]) => {
+    if (value !== undefined && value !== '') {
+      formData.append(key, Array.isArray(value) ? value.join(',') : String(value));
+    }
+  });
+
+  const response = await requestJson<unknown>(MAINTENANCE_KB_ENDPOINTS.upload, {
+    method: 'POST',
+    body: formData,
+  });
+
+  return normalizeUploadResponse(response);
+}
+
+export async function listDocuments(filters: Partial<MaintenanceKbSearchRequest> = {}): Promise<DocumentManifest[]> {
+  const response = await requestJson<unknown>(MAINTENANCE_KB_ENDPOINTS.documents, { method: 'GET' }, {
+    line: filters.line ?? filters.production_line,
+    station: filters.station,
+    machine: filters.machine,
+    failure_type: filters.failure_type === 'all' ? undefined : filters.failure_type,
+    document_type: filters.document_type === 'all' ? undefined : filters.document_type,
+  });
+
+  const records = Array.isArray(response)
+    ? response
+    : Array.isArray(getRecord(response).items)
+      ? getRecord(response).items
+      : Array.isArray(getRecord(response).documents)
+        ? getRecord(response).documents
+        : [];
+
+  return records.map(normalizeManifest);
+}
+
+export async function getDocument(documentId: string): Promise<DocumentManifest> {
+  const response = await requestJson<unknown>(`${MAINTENANCE_KB_ENDPOINTS.documents}/${encodeURIComponent(documentId)}`, {
+    method: 'GET',
+  });
+  return normalizeManifest(response);
+}
+
+export async function ingestDocument(documentId: string): Promise<IngestResponse> {
+  const response = await requestJson<unknown>(`${MAINTENANCE_KB_ENDPOINTS.documents}/${encodeURIComponent(documentId)}/ingest`, {
+    method: 'POST',
+  });
+  return normalizeIngestResponse(response, documentId);
+}
+
+export async function getDocumentDiagnostics(documentId: string): Promise<DiagnosticsResponse> {
+  const response = await requestJson<unknown>(`${MAINTENANCE_KB_ENDPOINTS.documents}/${encodeURIComponent(documentId)}/diagnostics`, {
+    method: 'GET',
+  });
+  return normalizeDiagnosticsResponse(response, documentId);
+}
+
 export async function searchMaintenanceKbDocuments(
   request: MaintenanceKbSearchRequest,
 ): Promise<MaintenanceKbSearchResponse> {
@@ -396,14 +608,15 @@ export async function searchMaintenanceKbDocuments(
     };
   }
 
-  const response = await requestJson<MaintenanceKbSearchResponse>(MAINTENANCE_KB_ENDPOINTS.search, {
+  const response = await requestJson<MaintenanceKbSearchResponse & { results?: MaintenanceKbSearchResult[]; documents?: MaintenanceKbSearchResult[] }>(MAINTENANCE_KB_ENDPOINTS.search, {
     method: 'POST',
     body: JSON.stringify(toMaintenanceKbSearchApiRequest(request)),
   });
+  const items = response.items ?? response.results ?? response.documents ?? [];
 
   return {
     ...response,
-    items: (response.items ?? []).map(normalizeDocument),
+    items: items.map(normalizeDocument),
   };
 }
 

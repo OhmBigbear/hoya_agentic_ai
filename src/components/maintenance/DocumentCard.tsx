@@ -32,10 +32,13 @@ export function DocumentCard({ document }: DocumentCardProps) {
                 <Badge className="border-white/10 bg-white/5 text-slate-300">
                   {documentTypeLabels[document.document_type]}
                 </Badge>
+                <Badge className={document.source_origin === 'uploaded' ? 'border-green-500/30 bg-green-500/15 text-green-100' : 'border-blue-500/30 bg-blue-500/15 text-blue-100'}>
+                  {document.source_origin === 'uploaded' ? 'Uploaded KB' : 'Seeded KB'}
+                </Badge>
               </div>
               <h4 className="text-sm font-semibold text-white">{document.title}</h4>
-              {document.summary ? (
-                <p className="mt-2 text-xs leading-5 text-slate-400">{document.summary}</p>
+              {document.summary || document.excerpt ? (
+                <p className="mt-2 text-xs leading-5 text-slate-400">{document.summary ?? document.excerpt}</p>
               ) : null}
               <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
                 <span>{document.version}</span>

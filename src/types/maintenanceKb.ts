@@ -7,6 +7,17 @@ export type MaintenanceKbDocumentType =
   | 'troubleshooting';
 
 export type MaintenanceKbConfidenceLabel = 'high' | 'medium' | 'low' | 'no_evidence';
+export type MaintenanceKbSourceOrigin = 'seeded' | 'uploaded' | string;
+export type MaintenanceKbDocumentStatus =
+  | 'uploaded'
+  | 'pending'
+  | 'parsing'
+  | 'parsed'
+  | 'chunked'
+  | 'indexed'
+  | 'active'
+  | 'failed'
+  | string;
 
 export interface MaintenanceKbOption {
   id: string;
@@ -50,7 +61,10 @@ export interface MaintenanceKbSourceReference {
   page?: number;
   updated_at?: string;
   source_ref: string;
+  excerpt?: string;
+  source_origin?: MaintenanceKbSourceOrigin;
   relevance_score?: number;
+  score?: number;
 }
 
 export interface MaintenanceKbSearchResult {
@@ -62,6 +76,9 @@ export interface MaintenanceKbSearchResult {
   updated_at: string;
   source_ref: string;
   summary?: string;
+  excerpt?: string;
+  source_origin?: MaintenanceKbSourceOrigin;
+  metadata?: MaintenanceKbMetadata;
 }
 
 export interface MaintenanceKbChatRequest {
@@ -127,4 +144,85 @@ export interface MaintenanceKbChatResponse extends MaintenanceKbAdditiveResponse
   related_documents: MaintenanceKbSearchResult[];
   suggested_questions: MaintenanceKbSuggestedQuestion[];
   warnings: string[];
+}
+
+export interface MaintenanceKbDocumentMetadata {
+  title: string;
+  document_type: Exclude<MaintenanceKbDocumentType, 'all'>;
+  line: string;
+  station: string;
+  machine: string;
+  failure_type?: string;
+  knowledge_category?: string;
+  criticality: string;
+  language: string;
+  version?: string;
+  owner?: string;
+  effective_date?: string;
+  tags?: string[];
+}
+
+export interface DocumentManifest {
+  document_id: string;
+  title: string;
+  filename: string;
+  status: MaintenanceKbDocumentStatus;
+  document_type: Exclude<MaintenanceKbDocumentType, 'all'>;
+  line?: string;
+  station?: string;
+  machine?: string;
+  failure_type?: string;
+  knowledge_category?: string;
+  criticality?: string;
+  language?: string;
+  version?: string;
+  owner?: string;
+  effective_date?: string;
+  uploaded_at?: string;
+  updated_at?: string;
+  source_origin?: MaintenanceKbSourceOrigin;
+  checksum?: string;
+  warnings?: string[];
+  metadata?: MaintenanceKbMetadata;
+}
+
+export interface UploadResponse {
+  document_id: string;
+  manifest?: DocumentManifest;
+  status?: MaintenanceKbDocumentStatus;
+  warnings?: string[];
+  trace_id?: string;
+}
+
+export interface IngestStepStatus {
+  step: 'parse' | 'chunk' | 'index' | 'activate' | string;
+  status: MaintenanceKbDocumentStatus;
+  message?: string;
+  warnings?: string[];
+}
+
+export interface IngestResponse {
+  document_id: string;
+  status: MaintenanceKbDocumentStatus;
+  steps: IngestStepStatus[];
+  manifest?: DocumentManifest;
+  warnings?: string[];
+  trace_id?: string;
+}
+
+export interface DiagnosticsResponse {
+  document_id: string;
+  manifest_status?: MaintenanceKbDocumentStatus;
+  file_exists?: boolean;
+  parsed_exists?: boolean;
+  chunks_exists?: boolean;
+  indexed?: boolean;
+  active?: boolean;
+  checksum?: string;
+  vector_count?: number;
+  source_origin?: MaintenanceKbSourceOrigin;
+  trace_id?: string;
+  warnings?: string[];
+  indexing_metadata?: MaintenanceKbMetadata;
+  manifest?: DocumentManifest;
 }

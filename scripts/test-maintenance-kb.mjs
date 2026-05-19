@@ -28,6 +28,82 @@ globalThis.fetch = async (url, init = {}) => {
     });
   }
 
+  if (String(url).endsWith('/api/maintenance/kb/documents/upload')) {
+    assert.equal(init.method, 'POST');
+    assert.ok(init.body instanceof FormData);
+    return jsonResponse({
+      document_id: 'doc-upload-1',
+      status: 'uploaded',
+      manifest: {
+        document_id: 'doc-upload-1',
+        title: 'Uploaded Bearing Procedure',
+        filename: 'bearing-procedure.pdf',
+        status: 'uploaded',
+        document_type: 'troubleshooting',
+        machine: 'curve-gen-3b',
+        version: 'v1',
+        uploaded_at: '2026-05-19T08:00:00Z',
+        source_origin: 'uploaded',
+        warnings: [],
+      },
+      trace_id: 'trace-upload-1',
+    });
+  }
+
+  if (String(url).includes('/api/maintenance/kb/documents/doc-upload-1/ingest')) {
+    assert.equal(init.method, 'POST');
+    return jsonResponse({
+      document_id: 'doc-upload-1',
+      status: 'active',
+      steps: [
+        { step: 'parse', status: 'completed' },
+        { step: 'chunk', status: 'completed' },
+        { step: 'index', status: 'completed' },
+        { step: 'activate', status: 'completed' },
+      ],
+      trace_id: 'trace-ingest-1',
+    });
+  }
+
+  if (String(url).includes('/api/maintenance/kb/documents/doc-upload-1/diagnostics')) {
+    assert.equal(init.method, 'GET');
+    return jsonResponse({
+      document_id: 'doc-upload-1',
+      manifest_status: 'active',
+      file_exists: true,
+      parsed_exists: true,
+      chunks_exists: true,
+      indexed: true,
+      active: true,
+      checksum: 'sha256:abc',
+      vector_count: 12,
+      source_origin: 'uploaded',
+      trace_id: 'trace-diagnostics-1',
+      warnings: ['minor metadata warning'],
+      indexing_metadata: { embedding_model: 'test-embedding', chunks: 12 },
+    });
+  }
+
+  if (String(url).includes('/api/maintenance/kb/documents')) {
+    assert.equal(init.method, 'GET');
+    return jsonResponse({
+      documents: [
+        {
+          document_id: 'doc-upload-1',
+          title: 'Uploaded Bearing Procedure',
+          filename: 'bearing-procedure.pdf',
+          status: 'active',
+          document_type: 'troubleshooting',
+          machine: 'curve-gen-3b',
+          version: 'v1',
+          uploaded_at: '2026-05-19T08:00:00Z',
+          source_origin: 'uploaded',
+          warnings: ['minor metadata warning'],
+        },
+      ],
+    });
+  }
+
   if (String(url).endsWith('/api/maintenance/kb/search')) {
     const body = init.body ? JSON.parse(init.body) : {};
     if (body.query === '__503__') {
@@ -44,6 +120,9 @@ globalThis.fetch = async (url, init = {}) => {
           version: 'v2.3',
           updated_at: '2026-01-08',
           source_ref: 'SOP KB-MNT-045, steps 1-5',
+          source_origin: 'uploaded',
+          excerpt: 'Uploaded document excerpt about spindle bearing replacement.',
+          metadata: { machine: 'curve-gen-3b' },
         },
       ],
       trace_id: 'trace-search-1',
@@ -67,6 +146,8 @@ globalThis.fetch = async (url, init = {}) => {
           page: 8,
           updated_at: '2026-01-08',
           source_ref: 'SOP KB-MNT-045, step 4.2 and 5.1',
+          source_origin: 'uploaded',
+          excerpt: 'Uploaded evidence excerpt for installation and verification.',
           relevance_score: 0.96,
         },
       ],
@@ -119,9 +200,14 @@ try {
   const { MaintenanceKnowledgeBasePage } = await server.ssrLoadModule('/src/pages/maintenance/MaintenanceKnowledgeBasePage.tsx');
   const { FilterPanel } = await server.ssrLoadModule('/src/components/maintenance/FilterPanel.tsx');
   const { DocumentResultList } = await server.ssrLoadModule('/src/components/maintenance/DocumentResultList.tsx');
+  const { DocumentManagementPanel } = await server.ssrLoadModule('/src/components/maintenance/DocumentManagementPanel.tsx');
   const { AssistantPanel } = await server.ssrLoadModule('/src/components/maintenance/AssistantPanel.tsx');
   const {
     getMaintenanceKbContext,
+    uploadDocument,
+    listDocuments,
+    ingestDocument,
+    getDocumentDiagnostics,
     searchMaintenanceKbDocuments,
     askMaintenanceKbAssistant,
     toMaintenanceKbSearchApiRequest,
@@ -137,10 +223,32 @@ try {
     conversation_id: 'conversation-existing',
     trace_id: 'trace-existing',
   });
+  const uploadResponse = await uploadDocument(new File(['test'], 'bearing-procedure.pdf', { type: 'application/pdf' }), {
+    title: 'Uploaded Bearing Procedure',
+    document_type: 'troubleshooting',
+    line: 'rx1-surfacing',
+    station: 'curve-generating',
+    machine: 'curve-gen-3b',
+    failure_type: 'mechanical',
+    knowledge_category: 'bearing',
+    criticality: 'medium',
+    language: 'en',
+    version: 'v1',
+    owner: 'maintenance',
+    effective_date: '2026-05-19',
+    tags: ['bearing', 'spindle'],
+  });
+  const manifests = await listDocuments(filters);
+  const ingestResponse = await ingestDocument('doc-upload-1');
+  const diagnosticsResponse = await getDocumentDiagnostics('doc-upload-1');
 
   assert.equal(fetchCalls[0].url, 'http://agentic-core.test/api/maintenance/kb/context');
   assert.equal(fetchCalls[1].url, 'http://agentic-core.test/api/maintenance/kb/search');
   assert.equal(fetchCalls[2].url, 'http://agentic-core.test/api/maintenance/kb/chat');
+  assert.equal(fetchCalls[3].url, 'http://agentic-core.test/api/maintenance/kb/documents/upload');
+  assert.match(fetchCalls[4].url, /\/api\/maintenance\/kb\/documents\?line=rx1-surfacing/);
+  assert.equal(fetchCalls[5].url, 'http://agentic-core.test/api/maintenance/kb/documents/doc-upload-1/ingest');
+  assert.equal(fetchCalls[6].url, 'http://agentic-core.test/api/maintenance/kb/documents/doc-upload-1/diagnostics');
 
   assert.deepEqual(toMaintenanceKbSearchApiRequest(filters), {
     query: undefined,
@@ -182,15 +290,25 @@ try {
 
   assert.equal(searchResponse.items[0].kb_id, 'KB-MNT-045');
   assert.equal(searchResponse.items[0].match_score, 98);
+  assert.equal(searchResponse.items[0].source_origin, 'uploaded');
   assert.equal(searchResponse.trace_id, 'trace-search-1');
   assert.equal(chatResponse.trace_id, 'trace-chat-1');
   assert.equal(chatResponse.conversation_id, 'conversation-1');
   assert.equal(chatResponse.confidence, 61);
   assert.equal(chatResponse.sources[0].source_id, 'src-kb-mnt-045-step-4');
   assert.equal(chatResponse.sources[0].relevance_score, 96);
+  assert.equal(chatResponse.sources[0].source_origin, 'uploaded');
   assert.equal(chatResponse.related_history?.[0].id, 'MWO-2401-032');
   assert.equal(chatResponse.safety_critical, true);
   assert.equal(chatResponse.restricted_guidance, true);
+  assert.equal(uploadResponse.document_id, 'doc-upload-1');
+  assert.equal(uploadResponse.manifest?.source_origin, 'uploaded');
+  assert.equal(manifests[0].status, 'active');
+  assert.equal(manifests[0].source_origin, 'uploaded');
+  assert.equal(ingestResponse.steps.map((step) => step.step).join(','), 'parse,chunk,index,activate');
+  assert.equal(diagnosticsResponse.active, true);
+  assert.equal(diagnosticsResponse.vector_count, 12);
+  assert.equal(diagnosticsResponse.trace_id, 'trace-diagnostics-1');
   await assert.rejects(
     () => searchMaintenanceKbDocuments({ ...filters, query: '__503__' }),
     /safe backend error state/,
@@ -217,6 +335,7 @@ try {
   assert.match(documentsHtml, /KB-MNT-045/);
   assert.match(documentsHtml, /Precision Bearing Replacement Protocol/);
   assert.match(documentsHtml, /98%/);
+  assert.match(documentsHtml, /Uploaded KB/);
 
   const emptyDocumentsHtml = renderToStaticMarkup(React.createElement(DocumentResultList, {
     documents: [],
@@ -249,6 +368,8 @@ try {
   assert.match(assistantHtml, /61%/);
   assert.match(assistantHtml, /Source References/);
   assert.match(assistantHtml, /SOP KB-MNT-045, step 4\.2 and 5\.1/);
+  assert.match(assistantHtml, /Uploaded evidence excerpt/);
+  assert.match(assistantHtml, /Uploaded KB/);
   assert.match(assistantHtml, /Safety \/ Evidence Controls/);
   assert.match(assistantHtml, /Restricted guidance/);
   assert.match(assistantHtml, /Trace:/);
@@ -270,6 +391,34 @@ try {
     onSelectQuestion: () => {},
   }));
   assert.match(noEvidenceHtml, /No evidence found/);
+
+  const managementHtml = renderToStaticMarkup(React.createElement(DocumentManagementPanel, {
+    documents: manifests,
+    diagnostics: diagnosticsResponse,
+    ingestResult: ingestResponse,
+    uploadResult: uploadResponse,
+    isLoadingDocuments: false,
+    isUploading: false,
+    isIngesting: false,
+    isLoadingDiagnostics: false,
+    documentError: null,
+    uploadError: null,
+    ingestError: null,
+    diagnosticsError: null,
+    onUpload: async () => {},
+    onIngest: async () => {},
+    onDiagnostics: async () => {},
+    onRefresh: async () => {},
+    onSearchFiltersChange: () => {},
+    searchFilters: filters,
+  }));
+  assert.match(managementHtml, /Upload Document/);
+  assert.match(managementHtml, /Document Status/);
+  assert.match(managementHtml, /Uploaded Bearing Procedure/);
+  assert.match(managementHtml, /Ingest Steps/);
+  assert.match(managementHtml, /parse/);
+  assert.match(managementHtml, /Diagnostics/);
+  assert.match(managementHtml, /trace-diagnostics-1/);
 
   const unavailable = await fetch('http://agentic-core.test/api/maintenance/kb/unavailable');
   assert.equal(unavailable.status, 503);
