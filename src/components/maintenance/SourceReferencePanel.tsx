@@ -1,4 +1,4 @@
-import { ExternalLink } from 'lucide-react';
+import { FileText } from 'lucide-react';
 import { Badge } from '../../app/components/ui/badge';
 import type { MaintenanceKbSourceReference } from '../../types/maintenanceKb';
 
@@ -25,25 +25,49 @@ export function SourceReferencePanel({ sources }: SourceReferencePanelProps) {
               <div>
                 <div className="text-sm font-medium text-white">{source.title}</div>
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
-                  <span>
-                    {source.kb_id}
-                    {source.version ? ` - ${source.version}` : ''}
-                    {source.section ? ` - ${source.section}` : ''}
-                    {source.page ? ` - p.${source.page}` : ''}
-                  </span>
-                  <Badge className={source.source_origin === 'uploaded' ? 'border-green-500/30 bg-green-500/15 text-green-100' : 'border-blue-500/30 bg-blue-500/15 text-blue-100'}>
-                    {source.source_origin === 'uploaded' ? 'Uploaded KB' : 'Seeded KB'}
-                  </Badge>
-                  {source.relevance_score !== undefined ? <span>{source.relevance_score}% score</span> : null}
+                  <Badge className="border-white/10 bg-white/5 text-slate-300">{getDocumentTypeLabel(source.document_type)}</Badge>
+                  {source.page ? <span>Page {source.page}</span> : null}
+                  {source.section ? <span>{source.section}</span> : null}
+                  {source.confidence_label ? <span>{getConfidenceLabel(source.confidence_label)} confidence</span> : null}
+                  <OriginBadge origin={source.source_origin} />
                 </div>
                 {source.excerpt ? <div className="mt-2 text-xs leading-5 text-slate-300">{source.excerpt}</div> : null}
-                <div className="mt-2 text-xs text-slate-500">{source.source_ref}</div>
               </div>
-              <ExternalLink className="mt-1 h-4 w-4 shrink-0 text-slate-500" />
+              <FileText className="mt-1 h-4 w-4 shrink-0 text-slate-500" />
             </div>
           </div>
         ))}
       </div>
     </div>
   );
+}
+
+function getDocumentTypeLabel(documentType: string): string {
+  const labels: Record<string, string> = {
+    maintenance: 'Maintenance Document',
+    knowledge: 'Knowledge Document',
+    other: 'Other Document',
+    manual: 'Maintenance Document',
+    sop: 'Maintenance Document',
+    troubleshooting: 'Maintenance Document',
+    history: 'Maintenance Document',
+    lesson: 'Knowledge Document',
+  };
+  return labels[documentType] ?? documentType;
+}
+
+function getConfidenceLabel(label: string): string {
+  return label.replace('_', ' ');
+}
+
+function OriginBadge({ origin }: { origin?: string }) {
+  if (origin === 'uploaded') {
+    return <Badge className="border-green-500/30 bg-green-500/15 text-green-100">Uploaded KB</Badge>;
+  }
+
+  if (origin === 'seeded') {
+    return <Badge className="border-blue-500/30 bg-blue-500/15 text-blue-100">Seeded KB</Badge>;
+  }
+
+  return <Badge className="border-white/10 bg-white/5 text-slate-300">Maintenance KB</Badge>;
 }

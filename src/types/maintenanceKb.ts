@@ -1,19 +1,28 @@
 export type MaintenanceKbDocumentType =
   | 'all'
+  | 'maintenance'
   | 'manual'
   | 'sop'
   | 'history'
   | 'lesson'
-  | 'troubleshooting';
+  | 'troubleshooting'
+  | 'knowledge'
+  | 'other';
 
 export type MaintenanceKbConfidenceLabel = 'high' | 'medium' | 'low' | 'no_evidence';
 export type MaintenanceKbSourceOrigin = 'seeded' | 'uploaded' | string;
 export type MaintenanceKbDocumentStatus =
   | 'uploaded'
+  | 'queued'
+  | 'ocr_processing'
+  | 'ocr_completed'
+  | 'chunking'
   | 'pending'
   | 'parsing'
   | 'parsed'
   | 'chunked'
+  | 'embedding'
+  | 'ready'
   | 'indexed'
   | 'active'
   | 'failed'
@@ -65,6 +74,7 @@ export interface MaintenanceKbSourceReference {
   source_origin?: MaintenanceKbSourceOrigin;
   relevance_score?: number;
   score?: number;
+  confidence_label?: MaintenanceKbConfidenceLabel;
 }
 
 export interface MaintenanceKbSearchResult {
@@ -78,6 +88,7 @@ export interface MaintenanceKbSearchResult {
   summary?: string;
   excerpt?: string;
   source_origin?: MaintenanceKbSourceOrigin;
+  requires_ocr?: boolean;
   metadata?: MaintenanceKbMetadata;
 }
 
@@ -182,6 +193,7 @@ export interface DocumentManifest {
   updated_at?: string;
   source_origin?: MaintenanceKbSourceOrigin;
   checksum?: string;
+  requires_ocr?: boolean;
   warnings?: string[];
   metadata?: MaintenanceKbMetadata;
 }
@@ -212,8 +224,13 @@ export interface IngestResponse {
 
 export interface DiagnosticsResponse {
   document_id: string;
+  status?: MaintenanceKbDocumentStatus;
   manifest_status?: MaintenanceKbDocumentStatus;
+  requires_ocr?: boolean;
+  last_error?: string;
   file_exists?: boolean;
+  parsed_artifact_exists?: boolean;
+  chunk_artifact_exists?: boolean;
   parsed_exists?: boolean;
   chunks_exists?: boolean;
   indexed?: boolean;

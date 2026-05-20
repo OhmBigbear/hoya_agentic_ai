@@ -33,7 +33,7 @@ export type MaintenanceDocumentSummaryDto<TDocument = MaintenanceDocumentSummary
 
 export type MaintenanceSuggestedQuestionDto = string;
 
-export type KBDocumentType = 'manual' | 'sop' | 'history' | 'lesson';
+export type KBDocumentType = 'manual' | 'sop' | 'history' | 'lesson' | 'knowledge' | 'other';
 
 export interface KBDocumentSearchRequestDto {
   query?: string;

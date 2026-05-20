@@ -1,7 +1,16 @@
 import { AlertTriangle, CheckCircle2, FileUp, Loader2, RefreshCcw, Search, Stethoscope, UploadCloud } from 'lucide-react';
-import { ChangeEvent, FormEvent, useMemo, useState } from 'react';
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import { Badge } from '../../app/components/ui/badge';
 import { Button } from '../../app/components/ui/button';
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../../app/components/ui/dialog';
 import { Input } from '../../app/components/ui/input';
 import {
   Select,
@@ -20,10 +29,38 @@ import type {
 } from '../../types/maintenanceKb';
 
 const supportedExtensions = ['pdf', 'txt', 'docx', 'csv', 'xlsx'];
+const supportedUploadDocumentTypes: Array<MaintenanceKbDocumentMetadata['document_type']> = ['maintenance', 'knowledge', 'other'];
+const ocrRequiredMessage = 'No reliable text layer found. OCR is required before this document can be indexed.';
+const documentTypeLabels: Record<string, string> = {
+  maintenance: 'Maintenance Document',
+  knowledge: 'Knowledge Document',
+  other: 'Other Document',
+  manual: 'Maintenance Document',
+  sop: 'Maintenance Document',
+  troubleshooting: 'Maintenance Document',
+  history: 'Maintenance Document',
+  lesson: 'Knowledge Document',
+};
+const processingStatusLabels: Record<string, string> = {
+  uploaded: 'Uploaded',
+  pending: 'Waiting to process',
+  queued: 'Waiting to process',
+  parsing: 'Reading document',
+  ocr_processing: 'Reading document',
+  parsed: 'Text extracted',
+  ocr_completed: 'Text extracted',
+  chunking: 'Preparing knowledge',
+  chunked: 'Knowledge prepared',
+  embedding: 'Building search index',
+  indexed: 'Ready to ask',
+  ready: 'Ready to ask',
+  active: 'Ready to ask',
+  failed: 'Processing failed',
+};
 
 const defaultMetadata: MaintenanceKbDocumentMetadata = {
   title: '',
-  document_type: 'troubleshooting',
+  document_type: 'maintenance',
   line: 'rx1-surfacing',
   station: 'curve-generating',
   machine: 'curve-gen-3b',
@@ -47,7 +84,6 @@ interface DocumentManagementPanelProps {
   isIngesting: boolean;
   isLoadingDiagnostics: boolean;
   documentError?: string | null;
-  uploadError?: string | null;
   ingestError?: string | null;
   diagnosticsError?: string | null;
   onUpload: (file: File, metadata: MaintenanceKbDocumentMetadata) => Promise<void>;
@@ -68,7 +104,6 @@ export function DocumentManagementPanel({
   isIngesting,
   isLoadingDiagnostics,
   documentError,
-  uploadError,
   ingestError,
   diagnosticsError,
   onUpload,
@@ -81,18 +116,28 @@ export function DocumentManagementPanel({
   const [file, setFile] = useState<File | null>(null);
   const [metadata, setMetadata] = useState<MaintenanceKbDocumentMetadata>(defaultMetadata);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(Boolean(diagnostics));
 
-  const selectedDocumentTitle = useMemo(() => {
+  const selectedDocument = useMemo(() => {
     const id = diagnostics?.document_id ?? ingestResult?.document_id ?? uploadResult?.document_id;
-    return documents.find((document) => document.document_id === id)?.title ?? id;
+    return documents.find((document) => document.document_id === id);
   }, [diagnostics?.document_id, documents, ingestResult?.document_id, uploadResult?.document_id]);
+
+  const selectedDocumentTitle = selectedDocument?.title ?? diagnostics?.manifest?.title ?? diagnostics?.document_id;
+  const selectedDocumentFilename = selectedDocument?.filename ?? diagnostics?.manifest?.filename;
+
+  useEffect(() => {
+    if (diagnostics) {
+      setIsDiagnosticsOpen(true);
+    }
+  }, [diagnostics]);
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const nextFile = event.target.files?.[0] ?? null;
     setFile(nextFile);
     setValidationError(null);
 
-    if (nextFile && !metadata.title) {
+    if (nextFile && !metadata.title.trim()) {
       setMetadata((current) => ({
         ...current,
         title: nextFile.name.replace(/\.[^.]+$/, ''),
@@ -116,7 +161,7 @@ export function DocumentManagementPanel({
 
     const extension = file.name.split('.').pop()?.toLowerCase();
     if (!extension || !supportedExtensions.includes(extension)) {
-      setValidationError('Unsupported file type. Upload PDF, TXT, DOCX, CSV, or XLSX files.');
+      setValidationError('This file type is not supported yet.');
       return;
     }
 
@@ -125,8 +170,13 @@ export function DocumentManagementPanel({
       return;
     }
 
+    if (!metadata.document_type.trim()) {
+      setValidationError('Select a document type before uploading.');
+      return;
+    }
+
     setValidationError(null);
-    await onUpload(file, metadata);
+    await onUpload(file, applyContextDefaults(metadata, searchFilters));
   };
 
   return (
@@ -146,7 +196,7 @@ export function DocumentManagementPanel({
             <SelectField
               label="Document Type"
               value={metadata.document_type}
-              options={['troubleshooting', 'manual', 'sop', 'history', 'lesson']}
+              options={supportedUploadDocumentTypes}
               onChange={(value) => handleMetadataChange('document_type', value)}
             />
             <Field label="Line" value={metadata.line} onChange={(value) => handleMetadataChange('line', value)} />
@@ -168,21 +218,18 @@ export function DocumentManagementPanel({
               <Field label="Tags" value={(metadata.tags ?? []).join(', ')} onChange={(value) => handleMetadataChange('tags', value)} placeholder="bearing, spindle, loto" />
             </div>
           </div>
-          <StatusMessage message={validationError ?? uploadError} tone="error" />
-          {uploadResult ? (
-            <StatusMessage message={`Uploaded document ${uploadResult.document_id}${uploadResult.trace_id ? ` • trace ${uploadResult.trace_id}` : ''}`} tone="success" />
-          ) : null}
+          <StatusMessage message={validationError} tone="error" />
           <Button type="submit" disabled={isUploading} className="mt-3 bg-[#00d4ff] text-[#0a0f1e] hover:bg-[#00b8e6]">
             {isUploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UploadCloud className="mr-2 h-4 w-4" />}
             Upload
           </Button>
         </form>
 
-        <div className="min-h-0 rounded-md border border-white/10 bg-[#141b2e] p-4">
+        <div className="flex min-h-0 flex-col rounded-md border border-white/10 bg-[#141b2e] p-4">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold text-white">Document Status</h3>
-              <p className="text-xs text-slate-400">Uploaded manifests, ingestion actions, and UAT diagnostics</p>
+              <p className="text-xs text-slate-400">Uploaded documents and processing status</p>
             </div>
             <Button type="button" variant="outline" onClick={() => void onRefresh()} disabled={isLoadingDocuments} className="border-white/10 bg-white/5 text-slate-200 hover:bg-white/10">
               {isLoadingDocuments ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
@@ -214,70 +261,128 @@ export function DocumentManagementPanel({
           </div>
 
           <StatusMessage message={documentError ?? ingestError ?? diagnosticsError} tone="error" />
-          {documents.length === 0 && !isLoadingDocuments && !documentError ? (
-            <div className="rounded-md border border-dashed border-white/10 bg-[#101827] p-4 text-sm text-slate-400">No uploaded documents are available yet.</div>
-          ) : (
-            <div className="max-h-[270px] space-y-2 overflow-auto pr-1">
-              {documents.map((document) => (
-                <DocumentRow
-                  key={document.document_id}
-                  document={document}
-                  isIngesting={isIngesting}
-                  isLoadingDiagnostics={isLoadingDiagnostics}
-                  onIngest={onIngest}
-                  onDiagnostics={onDiagnostics}
-                />
-              ))}
-            </div>
-          )}
+          <div className="min-h-0">
+            {documents.length === 0 && !isLoadingDocuments && !documentError ? (
+              <div className="rounded-md border border-dashed border-white/10 bg-[#101827] p-4 text-sm text-slate-400">No uploaded documents are available yet.</div>
+            ) : (
+              <div className="min-h-[300px] max-h-[42vh] space-y-2 overflow-auto pr-1">
+                {documents.map((document) => (
+                  <DocumentRow
+                    key={document.document_id}
+                    document={document}
+                    diagnostics={diagnostics?.document_id === document.document_id ? diagnostics : null}
+                    isIngesting={isIngesting}
+                    isLoadingDiagnostics={isLoadingDiagnostics}
+                    onIngest={onIngest}
+                    onDiagnostics={onDiagnostics}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
 
-          {ingestResult ? <IngestSteps result={ingestResult} /> : null}
-          {diagnostics ? <DiagnosticsBlock diagnostics={diagnostics} title={selectedDocumentTitle} /> : null}
+          {ingestResult ? <ProcessingStatus result={ingestResult} /> : null}
         </div>
       </div>
+
+      <Dialog open={isDiagnosticsOpen && Boolean(diagnostics)} onOpenChange={setIsDiagnosticsOpen}>
+        <DialogContent className="grid max-h-[min(86vh,760px)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden border-white/10 bg-[#101827] p-0 text-slate-200 shadow-2xl shadow-black/40 sm:max-w-3xl">
+          <DialogHeader className="border-b border-white/10 px-5 py-4 pr-12">
+            <DialogTitle className="text-white">Document Details</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              {selectedDocumentTitle ?? 'Selected document'}
+              {selectedDocumentFilename ? <span className="block text-xs text-slate-500">{selectedDocumentFilename}</span> : null}
+            </DialogDescription>
+          </DialogHeader>
+          {diagnostics ? (
+            <DiagnosticsBlock diagnostics={diagnostics} title={selectedDocumentTitle} filename={selectedDocumentFilename} />
+          ) : null}
+          <DialogFooter className="border-t border-white/10 px-5 py-4">
+            <DialogClose asChild>
+              <Button type="button" variant="outline" className="border-white/10 bg-white/5 text-slate-200 hover:bg-white/10">
+                Close
+              </Button>
+            </DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }
 
+function contextValue(value: string | undefined): string | undefined {
+  return value && value !== 'all' ? value : undefined;
+}
+
+function applyContextDefaults(
+  metadata: MaintenanceKbDocumentMetadata,
+  searchFilters: MaintenanceKbSearchRequest,
+): MaintenanceKbDocumentMetadata {
+  return {
+    ...metadata,
+    line: metadata.line.trim() || contextValue(searchFilters.line) || contextValue(searchFilters.production_line) || '',
+    station: metadata.station.trim() || contextValue(searchFilters.station) || '',
+    machine: metadata.machine.trim() || contextValue(searchFilters.machine) || '',
+    failure_type: metadata.failure_type?.trim() || contextValue(searchFilters.failure_type),
+    document_type: (metadata.document_type.trim() || contextValue(searchFilters.document_type) || metadata.document_type) as MaintenanceKbDocumentMetadata['document_type'],
+  };
+}
+
 function DocumentRow({
   document,
+  diagnostics,
   isIngesting,
   isLoadingDiagnostics,
   onIngest,
   onDiagnostics,
 }: {
   document: DocumentManifest;
+  diagnostics: DiagnosticsResponse | null;
   isIngesting: boolean;
   isLoadingDiagnostics: boolean;
   onIngest: (documentId: string) => Promise<void>;
   onDiagnostics: (documentId: string) => Promise<void>;
 }) {
+  const requiresOcr = document.requires_ocr === true || diagnostics?.requires_ocr === true || hasOcrRequiredWarning(document.warnings);
+  const statusLabel = requiresOcr ? 'Processing failed' : getProcessingStatusLabel(document.status);
+
   return (
     <div className="rounded-md border border-white/10 bg-[#101827] p-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="mb-1 flex flex-wrap items-center gap-2">
             <span className="text-sm font-semibold text-white">{document.title}</span>
-            <OriginBadge origin={document.source_origin} />
-            <Badge className="border-white/10 bg-white/5 text-slate-300">{document.status}</Badge>
+            <OriginBadge origin={document.source_origin} fallbackOrigin="uploaded" />
+            {requiresOcr ? <OcrRequiredBadge /> : null}
+            <Badge className={requiresOcr ? 'border-amber-500/30 bg-amber-500/15 text-amber-100' : 'border-white/10 bg-white/5 text-slate-300'}>
+              {statusLabel}
+            </Badge>
           </div>
           <div className="text-xs text-slate-400">{document.filename}</div>
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
-            <span>{document.document_type}</span>
+            <span>{getDocumentTypeLabel(document.document_type)}</span>
             {document.machine ? <span>{document.machine}</span> : null}
             {document.version ? <span>{document.version}</span> : null}
             {document.uploaded_at ? <span>Uploaded {document.uploaded_at}</span> : null}
           </div>
-          {document.warnings?.length ? <div className="mt-2 text-xs text-amber-200">{document.warnings.join(', ')}</div> : null}
+          {document.warnings?.length ? (
+            <div className="mt-2 text-xs text-amber-200">{document.warnings.map(toUserFriendlyProcessingMessage).join(', ')}</div>
+          ) : null}
+          {requiresOcr ? (
+            <div className="mt-2 flex gap-2 rounded-md border border-amber-500/25 bg-amber-500/10 p-2 text-xs text-amber-100">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span>{ocrRequiredMessage} Processing is disabled until OCR creates a reliable text layer for this document.</span>
+            </div>
+          ) : null}
         </div>
         <div className="flex shrink-0 gap-2">
-          <Button type="button" size="sm" onClick={() => void onIngest(document.document_id)} disabled={isIngesting} className="bg-cyan-500/20 text-cyan-100 hover:bg-cyan-500/30">
+          <Button type="button" size="sm" onClick={() => void onIngest(document.document_id)} disabled={isIngesting || requiresOcr} title={requiresOcr ? 'OCR is required before processing can run.' : undefined} className="bg-cyan-500/20 text-cyan-100 hover:bg-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-50">
             {isIngesting ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="mr-2 h-3.5 w-3.5" />}
-            Ingest
+            Process Document
           </Button>
           <Button type="button" size="sm" variant="outline" onClick={() => void onDiagnostics(document.document_id)} disabled={isLoadingDiagnostics} className="border-white/10 bg-white/5 text-slate-200 hover:bg-white/10">
             {isLoadingDiagnostics ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Stethoscope className="mr-2 h-3.5 w-3.5" />}
-            Diagnostics
+            Details
           </Button>
         </div>
       </div>
@@ -285,60 +390,87 @@ function DocumentRow({
   );
 }
 
-function IngestSteps({ result }: { result: IngestResponse }) {
+function ProcessingStatus({ result }: { result: IngestResponse }) {
   return (
     <div className="mt-3 rounded-md border border-cyan-500/20 bg-cyan-500/10 p-3">
-      <div className="mb-2 text-xs font-semibold uppercase text-cyan-100">Ingest Steps</div>
+      <div className="mb-2 text-xs font-semibold uppercase text-cyan-100">Processing Status</div>
       <div className="grid gap-2 sm:grid-cols-4">
         {result.steps.map((step) => (
           <div key={step.step} className="rounded border border-white/10 bg-[#101827] p-2">
-            <div className="text-xs font-medium text-white">{step.step}</div>
-            <div className="text-xs text-cyan-200">{step.status}</div>
+            <div className="text-xs font-medium text-white">{getStepLabel(step.step)}</div>
+            <div className="text-xs text-cyan-200">{getProcessingStatusLabel(step.status)}</div>
           </div>
         ))}
       </div>
-      {result.trace_id ? <div className="mt-2 text-xs text-slate-400">Trace: {result.trace_id}</div> : null}
     </div>
   );
 }
 
-function DiagnosticsBlock({ diagnostics, title }: { diagnostics: DiagnosticsResponse; title?: string }) {
+function DiagnosticsBlock({
+  diagnostics,
+  title,
+  filename,
+}: {
+  diagnostics: DiagnosticsResponse;
+  title?: string;
+  filename?: string;
+}) {
   const checks = [
-    ['manifest', diagnostics.manifest_status],
-    ['file_exists', formatBoolean(diagnostics.file_exists)],
-    ['parsed_exists', formatBoolean(diagnostics.parsed_exists)],
-    ['chunks_exists', formatBoolean(diagnostics.chunks_exists)],
-    ['indexed', formatBoolean(diagnostics.indexed)],
-    ['active', formatBoolean(diagnostics.active)],
-    ['vector_count', diagnostics.vector_count],
-    ['source_origin', diagnostics.source_origin],
-    ['checksum', diagnostics.checksum],
-    ['trace_id', diagnostics.trace_id],
+    ['Status', getProcessingStatusLabel(diagnostics.status ?? diagnostics.manifest_status)],
+    ['Text extracted', formatBoolean(diagnostics.parsed_exists ?? diagnostics.parsed_artifact_exists)],
+    ['Knowledge prepared', formatBoolean(diagnostics.chunks_exists ?? diagnostics.chunk_artifact_exists)],
+    ['Ready to ask', formatBoolean(diagnostics.active ?? diagnostics.indexed)],
   ];
 
   return (
-    <div className="mt-3 rounded-md border border-white/10 bg-[#101827] p-3">
-      <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase text-slate-300">
-        <Search className="h-3.5 w-3.5" />
-        Diagnostics {title ? `• ${title}` : ''}
+    <div className="min-h-0 overflow-y-auto px-5 py-4">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Search className="h-4 w-4 text-cyan-300" />
+        <span className="text-sm font-semibold text-white">{title ?? diagnostics.document_id}</span>
+        {filename ? <span className="text-xs text-slate-500">{filename}</span> : null}
+        {diagnostics.status || diagnostics.manifest_status ? (
+          <Badge className="border-white/10 bg-white/5 text-slate-300">{getProcessingStatusLabel(diagnostics.status ?? diagnostics.manifest_status)}</Badge>
+        ) : null}
+        {diagnostics.requires_ocr ? <OcrRequiredBadge /> : null}
       </div>
+      {diagnostics.requires_ocr ? (
+        <div className="mb-3 flex gap-2 rounded-md border border-amber-500/25 bg-amber-500/10 p-2 text-xs text-amber-100">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>{ocrRequiredMessage}</span>
+        </div>
+      ) : null}
       <div className="grid gap-2 sm:grid-cols-2">
         {checks.map(([label, value]) => (
-          value === undefined || value === '' ? null : (
-            <div key={String(label)} className="text-xs">
-              <span className="text-slate-500">{label}:</span> <span className="text-slate-200">{String(value)}</span>
-            </div>
-          )
+          <div key={String(label)} className="min-w-0 rounded-md border border-white/10 bg-[#141b2e] p-2 text-xs">
+            <div className="mb-1 text-[11px] font-medium uppercase text-slate-500">{label}</div>
+            <div className="break-words text-slate-200">{value === undefined || value === '' ? '-' : String(value)}</div>
+          </div>
         ))}
       </div>
-      {diagnostics.warnings?.length ? <div className="mt-2 text-xs text-amber-200">Warnings: {diagnostics.warnings.join(', ')}</div> : null}
-      {diagnostics.indexing_metadata && Object.keys(diagnostics.indexing_metadata).length ? (
-        <pre className="mt-2 max-h-24 overflow-auto rounded border border-white/10 bg-black/20 p-2 text-[11px] text-slate-300">
-          {JSON.stringify(diagnostics.indexing_metadata, null, 2)}
-        </pre>
+      {diagnostics.last_error ? (
+        <div className="mt-3 rounded-md border border-red-500/25 bg-red-500/10 p-3 text-xs text-red-100">
+          <div className="mb-1 font-semibold uppercase text-red-200">Processing message</div>
+          <div className="break-words">{toUserFriendlyProcessingMessage(diagnostics.last_error)}</div>
+        </div>
       ) : null}
+      <div className="mt-3 rounded-md border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-100">
+        <div className="mb-1 font-semibold uppercase text-amber-200">Warnings</div>
+        {diagnostics.warnings?.length ? (
+          <ul className="space-y-1">
+            {diagnostics.warnings.map((warning) => (
+              <li key={warning} className="break-words">{toUserFriendlyProcessingMessage(warning)}</li>
+            ))}
+          </ul>
+        ) : (
+          <div>-</div>
+        )}
+      </div>
     </div>
   );
+}
+
+function OcrRequiredBadge() {
+  return <Badge className="border-amber-500/30 bg-amber-500/15 text-amber-100">OCR Required</Badge>;
 }
 
 function Field({
@@ -383,7 +515,7 @@ function SelectField({
         <SelectContent className="border-white/10 bg-[#1e293b]">
           {options.map((option) => (
             <SelectItem key={option} value={option} className="text-white">
-              {option}
+              {getDocumentTypeLabel(option)}
             </SelectItem>
           ))}
         </SelectContent>
@@ -392,13 +524,22 @@ function SelectField({
   );
 }
 
-function OriginBadge({ origin }: { origin?: string }) {
-  const isUploaded = origin === 'uploaded';
-  return (
-    <Badge className={isUploaded ? 'border-green-500/30 bg-green-500/15 text-green-100' : 'border-blue-500/30 bg-blue-500/15 text-blue-100'}>
-      {isUploaded ? 'Uploaded KB' : 'Seeded KB'}
-    </Badge>
-  );
+function OriginBadge({ origin, fallbackOrigin }: { origin?: string; fallbackOrigin?: string }) {
+  const effectiveOrigin = origin ?? fallbackOrigin;
+
+  if (effectiveOrigin === 'uploaded') {
+    return <Badge className="border-green-500/30 bg-green-500/15 text-green-100">Uploaded KB</Badge>;
+  }
+
+  if (effectiveOrigin === 'seeded') {
+    return <Badge className="border-blue-500/30 bg-blue-500/15 text-blue-100">Seeded KB</Badge>;
+  }
+
+  return <Badge className="border-white/10 bg-white/5 text-slate-300">Maintenance KB</Badge>;
+}
+
+function hasOcrRequiredWarning(warnings: string[] | undefined): boolean {
+  return warnings?.some((warning) => /ocr|text layer|extractable text/i.test(warning)) ?? false;
 }
 
 function StatusMessage({ message, tone }: { message?: string | null; tone: 'error' | 'success' }) {
@@ -416,4 +557,45 @@ function StatusMessage({ message, tone }: { message?: string | null; tone: 'erro
 
 function formatBoolean(value: boolean | undefined): string | undefined {
   return value === undefined ? undefined : value ? 'yes' : 'no';
+}
+
+function getDocumentTypeLabel(documentType: string): string {
+  return documentTypeLabels[documentType] ?? documentType;
+}
+
+function getProcessingStatusLabel(status: string | undefined): string {
+  return status ? processingStatusLabels[status] ?? status : '-';
+}
+
+function getStepLabel(step: string): string {
+  const stepLabels: Record<string, string> = {
+    parse: 'Read document',
+    ocr: 'Read document',
+    chunk: 'Prepare knowledge',
+    index: 'Build search index',
+    activate: 'Ready to ask',
+  };
+  return stepLabels[step] ?? step;
+}
+
+function toUserFriendlyProcessingMessage(message: string): string {
+  const normalized = message.toLowerCase();
+
+  if (/unsupported.*file|file.*unsupported|unsupported_file|unsupported file type/.test(normalized)) {
+    return 'This file type is not supported yet.';
+  }
+
+  if (/ocr.*fail|ocr_failed|ocr required|could not read|extract.*text|text layer/.test(normalized)) {
+    return 'We could not read the document text.';
+  }
+
+  if (/chunk.*fail|chunking_failed|prepare.*search|prepare.*document/.test(normalized)) {
+    return 'We could not prepare this document for search.';
+  }
+
+  if (/index.*fail|indexing_failed|searchable index|embedding.*fail/.test(normalized)) {
+    return 'We could not build the searchable index.';
+  }
+
+  return message;
 }

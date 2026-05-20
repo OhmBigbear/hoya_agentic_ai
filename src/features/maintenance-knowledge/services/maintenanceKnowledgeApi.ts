@@ -302,6 +302,8 @@ export async function getMaintenanceKnowledgeContext(
       { id: 'sop', label: 'SOPs' },
       { id: 'history', label: 'History' },
       { id: 'lesson', label: 'Best Practices' },
+      { id: 'knowledge', label: 'Knowledge' },
+      { id: 'other', label: 'Other' },
     ],
     suggestedQuestions,
     trace: createTraceMetadata('context'),

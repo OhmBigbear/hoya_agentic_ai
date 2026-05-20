@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { AssistantPanel } from '../../components/maintenance/AssistantPanel';
 import { DocumentManagementPanel } from '../../components/maintenance/DocumentManagementPanel';
 import { DocumentResultList } from '../../components/maintenance/DocumentResultList';
@@ -8,8 +8,8 @@ import {
   askMaintenanceKbAssistant,
   getDocumentDiagnostics,
   getMaintenanceKbContext,
-  ingestDocument,
   listDocuments,
+  processDocument,
   searchMaintenanceKbDocuments,
   uploadDocument,
 } from '../../services/maintenanceKbApi';
@@ -72,7 +72,7 @@ export function MaintenanceKnowledgeBasePage({
   const [searchError, setSearchError] = useState<string | null>(null);
   const [assistantError, setAssistantError] = useState<string | null>(null);
   const [documentError, setDocumentError] = useState<string | null>(null);
-  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadNotice, setUploadNotice] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
   const [ingestError, setIngestError] = useState<string | null>(null);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | undefined>();
@@ -169,6 +169,19 @@ export function MaintenanceKnowledgeBasePage({
   }, [context, filters]);
 
   const contextForPanel = useMemo(() => context ?? undefined, [context]);
+  const selectedDocumentRequiresOcr = diagnostics?.requires_ocr === true;
+
+  useEffect(() => {
+    if (!uploadNotice) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setUploadNotice(null);
+    }, 5000);
+
+    return () => window.clearTimeout(timeout);
+  }, [uploadNotice]);
 
   const handleSendQuestion = async () => {
     const trimmedQuestion = question.trim();
@@ -203,29 +216,41 @@ export function MaintenanceKnowledgeBasePage({
 
   const handleUpload = async (file: File, metadata: MaintenanceKbDocumentMetadata) => {
     setIsUploading(true);
-    setUploadError(null);
     try {
       const response = await uploadDocument(file, metadata);
       setUploadResult(response);
+      setUploadNotice({
+        tone: 'success',
+        message: 'Document uploaded. Process it before asking questions from this document.',
+      });
       await refreshDocuments();
     } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to upload maintenance document.';
       setUploadResult(null);
-      setUploadError(error instanceof Error ? error.message : 'Unable to upload maintenance document.');
+      setUploadNotice({
+        tone: 'error',
+        message,
+      });
     } finally {
       setIsUploading(false);
     }
   };
 
   const handleIngest = async (documentId: string) => {
+    if (diagnostics?.document_id === documentId && diagnostics.requires_ocr) {
+      setIngestError('Processing is disabled for this document because OCR is required before indexing.');
+      return;
+    }
+
     setIsIngesting(true);
     setIngestError(null);
     try {
-      const response = await ingestDocument(documentId);
+      const response = await processDocument(documentId);
       setIngestResult(response);
       await refreshDocuments();
     } catch (error) {
       setIngestResult(null);
-      setIngestError(error instanceof Error ? error.message : 'Unable to ingest maintenance document.');
+      setIngestError(error instanceof Error ? error.message : 'Unable to process maintenance document.');
     } finally {
       setIsIngesting(false);
     }
@@ -250,6 +275,7 @@ export function MaintenanceKnowledgeBasePage({
       className="fixed bottom-0 right-0 top-16 overflow-hidden bg-[#0a0f1e] transition-all duration-300"
       style={{ left: sidebarCollapsed ? '4rem' : '16rem' }}
     >
+      {uploadNotice ? <UploadNotice tone={uploadNotice.tone} message={uploadNotice.message} /> : null}
       <div className="flex h-full min-h-0 flex-col">
         <div className="shrink-0 border-b border-white/10 p-6 pb-4">
           <div className="mb-4">
@@ -288,7 +314,6 @@ export function MaintenanceKnowledgeBasePage({
                 isIngesting={isIngesting}
                 isLoadingDiagnostics={isDiagnosticsLoading}
                 documentError={documentError}
-                uploadError={uploadError}
                 ingestError={ingestError}
                 diagnosticsError={diagnosticsError}
                 onUpload={handleUpload}
@@ -298,7 +323,12 @@ export function MaintenanceKnowledgeBasePage({
                 searchFilters={filters}
                 onSearchFiltersChange={setFilters}
               />
-              <DocumentResultList documents={documents} isLoading={isContextLoading || isSearchLoading} error={searchError} />
+              <DocumentResultList
+                documents={documents}
+                isLoading={isContextLoading || isSearchLoading}
+                error={searchError}
+                selectedDocumentRequiresOcr={selectedDocumentRequiresOcr}
+              />
             </section>
             <AssistantPanel
               context={contextForPanel}
@@ -308,6 +338,7 @@ export function MaintenanceKnowledgeBasePage({
               isLoading={isAssistantLoading}
               error={assistantError}
               relatedHistory={assistantResponse?.related_history ?? relatedHistory}
+              selectedDocumentRequiresOcr={selectedDocumentRequiresOcr}
               onQuestionChange={setQuestion}
               onSendQuestion={handleSendQuestion}
               onSelectQuestion={handleSelectSuggestedQuestion}
@@ -316,5 +347,24 @@ export function MaintenanceKnowledgeBasePage({
         )}
       </div>
     </main>
+  );
+}
+
+function UploadNotice({ tone, message }: { tone: 'success' | 'error'; message: string }) {
+  const isError = tone === 'error';
+
+  return (
+    <div className="pointer-events-none absolute right-6 top-6 z-30 w-[min(420px,calc(100%-3rem))]">
+      <div
+        className={`flex gap-2 rounded-md border p-3 text-sm shadow-xl shadow-black/30 ${
+          isError ? 'border-red-500/25 bg-[#2a1520] text-red-100' : 'border-green-500/25 bg-[#10251e] text-green-100'
+        }`}
+        role="status"
+        aria-live="polite"
+      >
+        {isError ? <AlertTriangle className="h-4 w-4 shrink-0" /> : <CheckCircle2 className="h-4 w-4 shrink-0" />}
+        <span>{message}</span>
+      </div>
+    </div>
   );
 }

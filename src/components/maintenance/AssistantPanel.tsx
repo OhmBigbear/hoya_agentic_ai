@@ -1,4 +1,4 @@
-import { AlertCircle, Bot, FileWarning, Info, Loader2, Send, ShieldAlert, Sparkles } from 'lucide-react';
+import { AlertCircle, Bot, FileWarning, Loader2, Send, ShieldAlert, Sparkles } from 'lucide-react';
 import { FormEvent } from 'react';
 import { Badge } from '../../app/components/ui/badge';
 import { Button } from '../../app/components/ui/button';
@@ -22,6 +22,7 @@ interface AssistantPanelProps {
   isLoading: boolean;
   error?: string | null;
   relatedHistory: MaintenanceKbRelatedHistoryItem[];
+  selectedDocumentRequiresOcr?: boolean;
   onQuestionChange: (question: string) => void;
   onSendQuestion: () => void;
   onSelectQuestion: (question: string) => void;
@@ -35,6 +36,7 @@ export function AssistantPanel({
   isLoading,
   error,
   relatedHistory,
+  selectedDocumentRequiresOcr = false,
   onQuestionChange,
   onSendQuestion,
   onSelectQuestion,
@@ -73,6 +75,12 @@ export function AssistantPanel({
             <Badge className="border-purple-500/30 bg-purple-500/20 text-purple-200">{failureType}</Badge>
           </div>
         </div>
+        {selectedDocumentRequiresOcr ? (
+          <div className="mt-3 flex gap-2 rounded-md border border-amber-500/25 bg-amber-500/10 p-2 text-xs text-amber-100">
+            <FileWarning className="h-4 w-4 shrink-0" />
+            <span>Selected document is not searchable yet because OCR is required.</span>
+          </div>
+        ) : null}
       </div>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-auto p-5">
@@ -103,7 +111,6 @@ export function AssistantPanel({
 
             <GovernanceBlock response={response} />
             <ConfidenceBlock response={response} />
-            <MetadataBlock response={response} />
             <SourceReferencePanel sources={response.sources} />
             <SuggestedQuestions questions={response.suggested_questions} onSelectQuestion={onSelectQuestion} />
             <RelatedHistoryPanel
@@ -148,7 +155,7 @@ export function AssistantPanel({
 }
 
 function ConfidenceBlock({ response }: { response: MaintenanceKbChatResponse }) {
-  const hasNoEvidence = response.confidence_label === 'no_evidence' || response.evidence_satisfied === false;
+  const hasNoEvidence = response.confidence_label === 'no_evidence' || response.sources.length === 0;
   const isLowConfidence = response.confidence_label === 'low' || response.confidence < 70;
 
   return (
@@ -170,7 +177,7 @@ function ConfidenceBlock({ response }: { response: MaintenanceKbChatResponse }) 
       {isLowConfidence && !hasNoEvidence ? (
         <div className="mt-2 flex gap-2 rounded-md border border-amber-500/25 bg-amber-500/10 p-2 text-xs text-amber-100">
           <ShieldAlert className="h-4 w-4 shrink-0" />
-          <span>Low confidence: verify against official procedures before acting.</span>
+          <span>This answer has limited supporting evidence. Please verify with the original document.</span>
         </div>
       ) : null}
       {response.warnings.map((warning) => (
@@ -217,45 +224,6 @@ function GovernanceBlock({ response }: { response: MaintenanceKbChatResponse }) 
       </div>
     </div>
   );
-}
-
-function MetadataBlock({ response }: { response: MaintenanceKbChatResponse }) {
-  const retrievalSummary = summarizeMetadata(response.retrieval_metadata);
-
-  if (!response.trace_id && !response.conversation_id && !retrievalSummary) {
-    return null;
-  }
-
-  return (
-    <div className="rounded-md border border-white/10 bg-[#101827] p-3 text-xs text-slate-400">
-      <div className="mb-2 flex items-center gap-2 font-semibold uppercase">
-        <Info className="h-3.5 w-3.5" />
-        Response Metadata
-      </div>
-      <div className="space-y-1">
-        {response.trace_id ? <div><span className="text-slate-500">Trace:</span> {response.trace_id}</div> : null}
-        {response.conversation_id ? <div><span className="text-slate-500">Conversation:</span> {response.conversation_id}</div> : null}
-        {retrievalSummary ? <div><span className="text-slate-500">Retrieval:</span> {retrievalSummary}</div> : null}
-      </div>
-    </div>
-  );
-}
-
-function summarizeMetadata(metadata: Record<string, unknown> | undefined): string {
-  if (!metadata) {
-    return '';
-  }
-
-  const preferredKeys = ['mode', 'returned', 'top_k', 'sources', 'retrieval_count', 'latency_ms'];
-  const summary = preferredKeys
-    .filter((key) => metadata[key] !== undefined)
-    .map((key) => `${key}: ${String(metadata[key])}`);
-
-  if (summary.length > 0) {
-    return summary.join(', ');
-  }
-
-  return Object.keys(metadata).slice(0, 4).join(', ');
 }
 
 function getOptionLabel(options: Array<{ id: string; label: string }> | undefined, value: string | undefined): string {

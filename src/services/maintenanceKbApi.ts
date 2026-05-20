@@ -51,6 +51,9 @@ const mockContext: MaintenanceKbContext = {
   ],
   document_types: [
     { id: 'all', label: 'All Documents' },
+    { id: 'maintenance', label: 'Maintenance Document' },
+    { id: 'knowledge', label: 'Knowledge Document' },
+    { id: 'other', label: 'Other Document' },
     { id: 'sop', label: 'SOPs' },
     { id: 'manual', label: 'Manuals' },
     { id: 'troubleshooting', label: 'Troubleshooting' },
@@ -155,6 +158,7 @@ const suggestedQuestions: MaintenanceKbSuggestedQuestion[] = [
 ];
 
 const mockDelay = 180;
+const uploadDocumentTypes = new Set(['maintenance', 'knowledge', 'other']);
 
 type SearchApiRequest = {
   query?: string;
@@ -243,7 +247,7 @@ function formatHttpError(status: number, statusText: string, body: string): stri
     return 'Maintenance KB backend returned 503. The safe backend error state is active; please retry after the service is healthy.';
   }
 
-  const detail = parseErrorDetail(body);
+  const detail = toUserFriendlyError(parseErrorDetail(body));
   return `Maintenance KB backend request failed (${status} ${statusText})${detail ? `: ${detail}` : ''}`;
 }
 
@@ -253,12 +257,37 @@ function parseErrorDetail(body: string): string {
   }
 
   try {
-    const parsed = JSON.parse(body) as { detail?: unknown; message?: unknown; error?: unknown };
+    const parsed = JSON.parse(body) as { detail?: unknown; message?: unknown; error?: unknown; code?: unknown; error_code?: unknown; stage?: unknown };
     const detail = parsed.detail ?? parsed.message ?? parsed.error;
-    return typeof detail === 'string' ? detail : body;
+    const parts = [parsed.code, parsed.error_code, parsed.stage, detail]
+      .filter((value) => value !== undefined && value !== null && value !== '')
+      .map(String);
+    return parts.length ? parts.join(' ') : body;
   } catch {
     return body;
   }
+}
+
+function toUserFriendlyError(detail: string): string {
+  const normalized = detail.toLowerCase();
+
+  if (/unsupported.*file|file.*unsupported|unsupported_file|unsupported file type/.test(normalized)) {
+    return 'This file type is not supported yet.';
+  }
+
+  if (/ocr.*fail|ocr_failed|ocr required|could not read|extract.*text|text layer/.test(normalized)) {
+    return 'We could not read the document text.';
+  }
+
+  if (/chunk.*fail|chunking_failed|prepare.*search|prepare.*document/.test(normalized)) {
+    return 'We could not prepare this document for search.';
+  }
+
+  if (/index.*fail|indexing_failed|searchable index|embedding.*fail/.test(normalized)) {
+    return 'We could not build the searchable index.';
+  }
+
+  return detail;
 }
 
 function toBackendFilters(request: MaintenanceKbSearchRequest): SearchApiRequest['filters'] {
@@ -352,6 +381,16 @@ function getNumber(record: Record<string, unknown>, ...keys: string[]): number |
   return undefined;
 }
 
+function getBoolean(record: Record<string, unknown>, ...keys: string[]): boolean | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'boolean') {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 function normalizeDocument(item: Partial<MaintenanceKbSearchResult> & Record<string, unknown>): MaintenanceKbSearchResult {
   const metadata = getRecord(item.metadata);
 
@@ -359,13 +398,14 @@ function normalizeDocument(item: Partial<MaintenanceKbSearchResult> & Record<str
     kb_id: String(item.kb_id ?? item.document_id ?? item.source_id ?? ''),
     title: String(item.title ?? metadata.title ?? 'Untitled maintenance document'),
     match_score: normalizeScore(item.match_score ?? item.score ?? item.relevance_score),
-    document_type: (item.document_type ?? metadata.document_type ?? 'manual') as Exclude<MaintenanceKbDocumentType, 'all'>,
+    document_type: (item.document_type ?? metadata.document_type ?? 'maintenance') as Exclude<MaintenanceKbDocumentType, 'all'>,
     version: String(item.version ?? metadata.version ?? 'n/a'),
     updated_at: String(item.updated_at ?? item.uploaded_at ?? 'n/a'),
     source_ref: String(item.source_ref ?? item.source ?? item.filename ?? 'Source reference unavailable'),
     summary: typeof item.summary === 'string' ? item.summary : undefined,
     excerpt: typeof item.excerpt === 'string' ? item.excerpt : undefined,
     source_origin: getString(item, 'source_origin') ?? getString(metadata, 'source_origin'),
+    requires_ocr: getBoolean(item, 'requires_ocr') ?? getBoolean(metadata, 'requires_ocr'),
     metadata,
   };
 }
@@ -379,7 +419,7 @@ function normalizeSource(source: Partial<MaintenanceKbSourceReference> & Record<
     source_id: String(source.source_id ?? `${kbId}-${index + 1}`),
     kb_id: kbId,
     title: String(source.title ?? 'Untitled source'),
-    document_type: (source.document_type ?? metadata.document_type ?? 'manual') as Exclude<MaintenanceKbDocumentType, 'all'>,
+    document_type: (source.document_type ?? metadata.document_type ?? 'maintenance') as Exclude<MaintenanceKbDocumentType, 'all'>,
     version: source.version ? String(source.version) : undefined,
     section: source.section ? String(source.section) : undefined,
     page: typeof source.page === 'number' ? source.page : undefined,
@@ -389,6 +429,7 @@ function normalizeSource(source: Partial<MaintenanceKbSourceReference> & Record<
     source_origin: getString(source, 'source_origin') ?? getString(metadata, 'source_origin'),
     relevance_score: score === undefined ? undefined : normalizeScore(score),
     score: score === undefined ? undefined : normalizeScore(score),
+    confidence_label: (source.confidence_label ?? metadata.confidence_label) as MaintenanceKbConfidenceLabel | undefined,
   };
 }
 
@@ -401,7 +442,7 @@ function normalizeManifest(item: unknown): DocumentManifest {
     title: String(record.title ?? metadata.title ?? record.filename ?? 'Untitled maintenance document'),
     filename: String(record.filename ?? record.file_name ?? metadata.filename ?? 'Unknown file'),
     status: String(record.status ?? record.manifest_status ?? 'uploaded'),
-    document_type: (record.document_type ?? metadata.document_type ?? 'troubleshooting') as Exclude<MaintenanceKbDocumentType, 'all'>,
+    document_type: (record.document_type ?? metadata.document_type ?? 'maintenance') as Exclude<MaintenanceKbDocumentType, 'all'>,
     line: getString(record, 'line', 'production_line') ?? getString(metadata, 'line', 'production_line'),
     station: getString(record, 'station') ?? getString(metadata, 'station'),
     machine: getString(record, 'machine') ?? getString(metadata, 'machine'),
@@ -414,8 +455,9 @@ function normalizeManifest(item: unknown): DocumentManifest {
     effective_date: getString(record, 'effective_date') ?? getString(metadata, 'effective_date'),
     uploaded_at: getString(record, 'uploaded_at', 'created_at'),
     updated_at: getString(record, 'updated_at'),
-    source_origin: getString(record, 'source_origin') ?? getString(metadata, 'source_origin'),
+    source_origin: getString(record, 'source_origin') ?? getString(metadata, 'source_origin') ?? 'uploaded',
     checksum: getString(record, 'checksum'),
+    requires_ocr: getBoolean(record, 'requires_ocr') ?? getBoolean(metadata, 'requires_ocr'),
     warnings: toStringArray(record.warnings),
     metadata,
   };
@@ -443,7 +485,7 @@ function normalizeIngestResponse(response: unknown, documentId: string): IngestR
 
   return {
     document_id: String(record.document_id ?? documentId),
-    status: String(record.status ?? 'active'),
+    status: String(record.status ?? record.processing_state ?? record.state ?? 'active'),
     steps: rawSteps.map((item) => {
       const stepRecord = getRecord(item);
       return {
@@ -464,8 +506,13 @@ function normalizeDiagnosticsResponse(response: unknown, documentId: string): Di
 
   return {
     document_id: String(record.document_id ?? documentId),
+    status: getString(record, 'status'),
     manifest_status: getString(record, 'manifest_status', 'status'),
+    requires_ocr: getBoolean(record, 'requires_ocr'),
+    last_error: getString(record, 'last_error', 'error'),
     file_exists: typeof record.file_exists === 'boolean' ? record.file_exists : undefined,
+    parsed_artifact_exists: typeof record.parsed_artifact_exists === 'boolean' ? record.parsed_artifact_exists : undefined,
+    chunk_artifact_exists: typeof record.chunk_artifact_exists === 'boolean' ? record.chunk_artifact_exists : undefined,
     parsed_exists: typeof record.parsed_exists === 'boolean' ? record.parsed_exists : undefined,
     chunks_exists: typeof record.chunks_exists === 'boolean' ? record.chunks_exists : undefined,
     indexed: typeof record.indexed === 'boolean' ? record.indexed : undefined,
@@ -526,12 +573,75 @@ export async function getMaintenanceKbContext(): Promise<MaintenanceKbContext> {
   return requestJson<MaintenanceKbContext>(MAINTENANCE_KB_ENDPOINTS.context, { method: 'GET' });
 }
 
+type NormalizedUploadMetadata = Partial<MaintenanceKbDocumentMetadata> & Pick<MaintenanceKbDocumentMetadata, 'title' | 'document_type'>;
+
+function cleanString(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function cleanTags(value: unknown): string[] | undefined {
+  const rawTags = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(',')
+      : [];
+  const tags = rawTags
+    .map((tag) => cleanString(tag))
+    .filter((tag): tag is string => Boolean(tag));
+
+  return tags.length ? tags : undefined;
+}
+
+export function normalizeMaintenanceKbUploadMetadata(metadata: MaintenanceKbDocumentMetadata): NormalizedUploadMetadata {
+  const normalized = {
+    title: cleanString(metadata.title),
+    document_type: cleanString(metadata.document_type) as MaintenanceKbDocumentMetadata['document_type'] | undefined,
+    line: cleanString(metadata.line),
+    station: cleanString(metadata.station),
+    machine: cleanString(metadata.machine),
+    failure_type: cleanString(metadata.failure_type),
+    knowledge_category: cleanString(metadata.knowledge_category),
+    criticality: cleanString(metadata.criticality),
+    language: cleanString(metadata.language),
+    version: cleanString(metadata.version),
+    owner: cleanString(metadata.owner),
+    effective_date: cleanString(metadata.effective_date),
+    tags: cleanTags(metadata.tags),
+  };
+
+  if (!normalized.title) {
+    throw new Error('Enter a title before uploading.');
+  }
+
+  if (!normalized.document_type) {
+    throw new Error('Select a document type before uploading.');
+  }
+
+  if (!uploadDocumentTypes.has(normalized.document_type)) {
+    throw new Error('Select Maintenance Document, Knowledge Document, or Other Document before uploading.');
+  }
+
+  return Object.fromEntries(
+    Object.entries(normalized).filter(([, value]) => value !== undefined),
+  ) as NormalizedUploadMetadata;
+}
+
 export async function uploadDocument(file: File, metadata: MaintenanceKbDocumentMetadata): Promise<UploadResponse> {
+  if (!file) {
+    throw new Error('Select a file before uploading.');
+  }
+
+  const normalizedMetadata = normalizeMaintenanceKbUploadMetadata(metadata);
   const formData = new FormData();
   formData.append('file', file);
-  formData.append('metadata', JSON.stringify(metadata));
-  Object.entries(metadata).forEach(([key, value]) => {
-    if (value !== undefined && value !== '') {
+  formData.append('metadata', JSON.stringify(normalizedMetadata));
+  Object.entries(normalizedMetadata).forEach(([key, value]) => {
+    if (value !== undefined) {
       formData.append(key, Array.isArray(value) ? value.join(',') : String(value));
     }
   });
@@ -572,7 +682,11 @@ export async function getDocument(documentId: string): Promise<DocumentManifest>
 }
 
 export async function ingestDocument(documentId: string): Promise<IngestResponse> {
-  const response = await requestJson<unknown>(`${MAINTENANCE_KB_ENDPOINTS.documents}/${encodeURIComponent(documentId)}/ingest`, {
+  return processDocument(documentId);
+}
+
+export async function processDocument(documentId: string): Promise<IngestResponse> {
+  const response = await requestJson<unknown>(`${MAINTENANCE_KB_ENDPOINTS.documents}/${encodeURIComponent(documentId)}/process`, {
     method: 'POST',
   });
   return normalizeIngestResponse(response, documentId);

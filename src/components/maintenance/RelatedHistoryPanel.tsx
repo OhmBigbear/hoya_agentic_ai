@@ -31,7 +31,7 @@ export function RelatedHistoryPanel({ history, relatedDocuments, similarCases = 
           <div key={document.kb_id} className="rounded-md border border-white/10 bg-[#101827] p-3">
             <div className="text-xs font-semibold text-cyan-300">{document.kb_id}</div>
             <div className="mt-1 text-sm font-medium text-white">{document.title}</div>
-            <div className="mt-1 text-xs text-slate-500">{document.match_score}% match - {document.source_ref}</div>
+            <div className="mt-1 text-xs text-slate-500">{document.summary ?? document.excerpt ?? document.source_ref}</div>
           </div>
         ))}
         {similarCases.map((item) => (

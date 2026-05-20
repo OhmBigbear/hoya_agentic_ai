@@ -16,7 +16,12 @@ globalThis.fetch = async (url, init = {}) => {
       stations: [{ id: 'curve-generating', label: 'CURVE GENERATING' }],
       machines: [{ id: 'curve-gen-3b', label: 'CURVE-GEN-3B' }],
       failure_types: [{ id: 'mechanical', label: 'Mechanical' }],
-      document_types: [{ id: 'all', label: 'All Documents' }, { id: 'sop', label: 'SOPs' }],
+      document_types: [
+        { id: 'all', label: 'All Documents' },
+        { id: 'maintenance', label: 'Maintenance Document' },
+        { id: 'knowledge', label: 'Knowledge Document' },
+        { id: 'other', label: 'Other Document' },
+      ],
       selected: {
         production_line: 'rx1-surfacing',
         station: 'curve-generating',
@@ -39,7 +44,7 @@ globalThis.fetch = async (url, init = {}) => {
         title: 'Uploaded Bearing Procedure',
         filename: 'bearing-procedure.pdf',
         status: 'uploaded',
-        document_type: 'troubleshooting',
+        document_type: 'maintenance',
         machine: 'curve-gen-3b',
         version: 'v1',
         uploaded_at: '2026-05-19T08:00:00Z',
@@ -50,18 +55,18 @@ globalThis.fetch = async (url, init = {}) => {
     });
   }
 
-  if (String(url).includes('/api/maintenance/kb/documents/doc-upload-1/ingest')) {
+  if (String(url).includes('/api/maintenance/kb/documents/doc-upload-1/process')) {
     assert.equal(init.method, 'POST');
     return jsonResponse({
       document_id: 'doc-upload-1',
-      status: 'active',
+      status: 'ready',
       steps: [
-        { step: 'parse', status: 'completed' },
-        { step: 'chunk', status: 'completed' },
-        { step: 'index', status: 'completed' },
-        { step: 'activate', status: 'completed' },
+        { step: 'ocr', status: 'ocr_completed' },
+        { step: 'chunk', status: 'chunked' },
+        { step: 'index', status: 'indexed' },
+        { step: 'activate', status: 'ready' },
       ],
-      trace_id: 'trace-ingest-1',
+      trace_id: 'trace-process-1',
     });
   }
 
@@ -92,8 +97,8 @@ globalThis.fetch = async (url, init = {}) => {
           document_id: 'doc-upload-1',
           title: 'Uploaded Bearing Procedure',
           filename: 'bearing-procedure.pdf',
-          status: 'active',
-          document_type: 'troubleshooting',
+          status: 'ready',
+          document_type: 'maintenance',
           machine: 'curve-gen-3b',
           version: 'v1',
           uploaded_at: '2026-05-19T08:00:00Z',
@@ -109,6 +114,18 @@ globalThis.fetch = async (url, init = {}) => {
     if (body.query === '__503__') {
       return new Response('Service unavailable', { status: 503, statusText: 'Service Unavailable' });
     }
+    if (body.query === '__ocr_failed__') {
+      return jsonError({ error_code: 'OCR_FAILED', detail: 'OCR failed while extracting text.' });
+    }
+    if (body.query === '__chunking_failed__') {
+      return jsonError({ error_code: 'CHUNKING_FAILED', detail: 'Chunking failed.' });
+    }
+    if (body.query === '__indexing_failed__') {
+      return jsonError({ error_code: 'INDEXING_FAILED', detail: 'Indexing failed.' });
+    }
+    if (body.query === '__unsupported_file__') {
+      return jsonError({ error_code: 'UNSUPPORTED_FILE', detail: 'Unsupported file.' });
+    }
 
     return jsonResponse({
       items: [
@@ -116,7 +133,7 @@ globalThis.fetch = async (url, init = {}) => {
           kb_id: 'KB-MNT-045',
           title: 'Precision Bearing Replacement Protocol',
           match_score: 0.98,
-          document_type: 'sop',
+          document_type: 'maintenance',
           version: 'v2.3',
           updated_at: '2026-01-08',
           source_ref: 'SOP KB-MNT-045, steps 1-5',
@@ -140,7 +157,7 @@ globalThis.fetch = async (url, init = {}) => {
           source_id: 'src-kb-mnt-045-step-4',
           kb_id: 'KB-MNT-045',
           title: 'Precision Bearing Replacement Protocol',
-          document_type: 'sop',
+          document_type: 'maintenance',
           version: 'v2.3',
           section: 'Installation and Verification',
           page: 8,
@@ -149,6 +166,7 @@ globalThis.fetch = async (url, init = {}) => {
           source_origin: 'uploaded',
           excerpt: 'Uploaded evidence excerpt for installation and verification.',
           relevance_score: 0.96,
+          confidence_label: 'low',
         },
       ],
       related_documents: [],
@@ -206,12 +224,13 @@ try {
     getMaintenanceKbContext,
     uploadDocument,
     listDocuments,
-    ingestDocument,
+    processDocument,
     getDocumentDiagnostics,
     searchMaintenanceKbDocuments,
     askMaintenanceKbAssistant,
     toMaintenanceKbSearchApiRequest,
     toMaintenanceKbChatApiRequest,
+    normalizeMaintenanceKbUploadMetadata,
   } = await server.ssrLoadModule('/src/services/maintenanceKbApi.ts');
 
   const context = await getMaintenanceKbContext();
@@ -224,22 +243,22 @@ try {
     trace_id: 'trace-existing',
   });
   const uploadResponse = await uploadDocument(new File(['test'], 'bearing-procedure.pdf', { type: 'application/pdf' }), {
-    title: 'Uploaded Bearing Procedure',
-    document_type: 'troubleshooting',
-    line: 'rx1-surfacing',
-    station: 'curve-generating',
-    machine: 'curve-gen-3b',
-    failure_type: 'mechanical',
-    knowledge_category: 'bearing',
+    title: '  Uploaded Bearing Procedure  ',
+    document_type: 'maintenance',
+    line: ' rx1-surfacing ',
+    station: ' curve-generating ',
+    machine: ' curve-gen-3b ',
+    failure_type: ' mechanical ',
+    knowledge_category: '   ',
     criticality: 'medium',
     language: 'en',
-    version: 'v1',
-    owner: 'maintenance',
-    effective_date: '2026-05-19',
-    tags: ['bearing', 'spindle'],
+    version: ' v1 ',
+    owner: '',
+    effective_date: '   ',
+    tags: [' bearing ', '', 'spindle'],
   });
   const manifests = await listDocuments(filters);
-  const ingestResponse = await ingestDocument('doc-upload-1');
+  const processResponse = await processDocument('doc-upload-1');
   const diagnosticsResponse = await getDocumentDiagnostics('doc-upload-1');
 
   assert.equal(fetchCalls[0].url, 'http://agentic-core.test/api/maintenance/kb/context');
@@ -247,8 +266,56 @@ try {
   assert.equal(fetchCalls[2].url, 'http://agentic-core.test/api/maintenance/kb/chat');
   assert.equal(fetchCalls[3].url, 'http://agentic-core.test/api/maintenance/kb/documents/upload');
   assert.match(fetchCalls[4].url, /\/api\/maintenance\/kb\/documents\?line=rx1-surfacing/);
-  assert.equal(fetchCalls[5].url, 'http://agentic-core.test/api/maintenance/kb/documents/doc-upload-1/ingest');
+  assert.equal(fetchCalls[5].url, 'http://agentic-core.test/api/maintenance/kb/documents/doc-upload-1/process');
   assert.equal(fetchCalls[6].url, 'http://agentic-core.test/api/maintenance/kb/documents/doc-upload-1/diagnostics');
+
+  const uploadFormData = fetchCalls[3].init.body;
+  const uploadMetadata = JSON.parse(uploadFormData.get('metadata'));
+  assert.deepEqual(uploadMetadata, {
+    title: 'Uploaded Bearing Procedure',
+    document_type: 'maintenance',
+    line: 'rx1-surfacing',
+    station: 'curve-generating',
+    machine: 'curve-gen-3b',
+    failure_type: 'mechanical',
+    criticality: 'medium',
+    language: 'en',
+    version: 'v1',
+    tags: ['bearing', 'spindle'],
+  });
+  assert.equal(uploadFormData.get('tags'), 'bearing,spindle');
+  assert.equal(uploadFormData.get('document_type'), 'maintenance');
+  assert.equal(uploadFormData.has('knowledge_category'), false);
+  assert.equal(uploadFormData.has('owner'), false);
+  assert.equal(uploadFormData.has('effective_date'), false);
+  assert.deepEqual(normalizeMaintenanceKbUploadMetadata({
+    title: ' Knowledge Note ',
+    document_type: 'knowledge',
+    line: 'rx1-surfacing',
+    station: 'curve-generating',
+    machine: 'curve-gen-3b',
+    criticality: 'medium',
+    language: 'en',
+    tags: [' safety ', ''],
+  }), {
+    title: 'Knowledge Note',
+    document_type: 'knowledge',
+    line: 'rx1-surfacing',
+    station: 'curve-generating',
+    machine: 'curve-gen-3b',
+    criticality: 'medium',
+    language: 'en',
+    tags: ['safety'],
+  });
+  assert.equal(normalizeMaintenanceKbUploadMetadata({
+    title: 'Miscellaneous Note',
+    document_type: 'other',
+    line: 'rx1-surfacing',
+    station: 'curve-generating',
+    machine: 'curve-gen-3b',
+    criticality: 'medium',
+    language: 'en',
+  }).document_type, 'other');
 
   assert.deepEqual(toMaintenanceKbSearchApiRequest(filters), {
     query: undefined,
@@ -303,15 +370,49 @@ try {
   assert.equal(chatResponse.restricted_guidance, true);
   assert.equal(uploadResponse.document_id, 'doc-upload-1');
   assert.equal(uploadResponse.manifest?.source_origin, 'uploaded');
-  assert.equal(manifests[0].status, 'active');
+  assert.equal(manifests[0].status, 'ready');
   assert.equal(manifests[0].source_origin, 'uploaded');
-  assert.equal(ingestResponse.steps.map((step) => step.step).join(','), 'parse,chunk,index,activate');
+  assert.equal(processResponse.steps.map((step) => step.step).join(','), 'ocr,chunk,index,activate');
   assert.equal(diagnosticsResponse.active, true);
   assert.equal(diagnosticsResponse.vector_count, 12);
   assert.equal(diagnosticsResponse.trace_id, 'trace-diagnostics-1');
+
+  const ocrDiagnosticsResponse = {
+    ...diagnosticsResponse,
+    status: 'failed',
+    manifest_status: 'failed',
+    requires_ocr: true,
+    last_error: 'No reliable extractable text found. OCR is required.',
+    active: false,
+    indexed: false,
+    vector_count: 0,
+    warnings: ['OCR required: scanned PDF has no reliable text layer.'],
+  };
+  const ocrManifest = {
+    ...manifests[0],
+    status: 'failed',
+    requires_ocr: true,
+    warnings: ['OCR required: scanned PDF has no reliable text layer.'],
+  };
   await assert.rejects(
     () => searchMaintenanceKbDocuments({ ...filters, query: '__503__' }),
     /safe backend error state/,
+  );
+  await assert.rejects(
+    () => searchMaintenanceKbDocuments({ ...filters, query: '__ocr_failed__' }),
+    /We could not read the document text\./,
+  );
+  await assert.rejects(
+    () => searchMaintenanceKbDocuments({ ...filters, query: '__chunking_failed__' }),
+    /We could not prepare this document for search\./,
+  );
+  await assert.rejects(
+    () => searchMaintenanceKbDocuments({ ...filters, query: '__indexing_failed__' }),
+    /We could not build the searchable index\./,
+  );
+  await assert.rejects(
+    () => searchMaintenanceKbDocuments({ ...filters, query: '__unsupported_file__' }),
+    /This file type is not supported yet\./,
   );
 
   const pageHtml = renderToStaticMarkup(React.createElement(MaintenanceKnowledgeBasePage, { sidebarCollapsed: true }));
@@ -334,7 +435,8 @@ try {
   }));
   assert.match(documentsHtml, /KB-MNT-045/);
   assert.match(documentsHtml, /Precision Bearing Replacement Protocol/);
-  assert.match(documentsHtml, /98%/);
+  assert.doesNotMatch(documentsHtml, /98%/);
+  assert.doesNotMatch(documentsHtml, /match/);
   assert.match(documentsHtml, /Uploaded KB/);
 
   const emptyDocumentsHtml = renderToStaticMarkup(React.createElement(DocumentResultList, {
@@ -367,16 +469,21 @@ try {
   assert.match(assistantHtml, /Use the approved bearing replacement procedure/);
   assert.match(assistantHtml, /61%/);
   assert.match(assistantHtml, /Source References/);
-  assert.match(assistantHtml, /SOP KB-MNT-045, step 4\.2 and 5\.1/);
+  assert.match(assistantHtml, /Maintenance Document/);
+  assert.match(assistantHtml, /Page 8/);
+  assert.match(assistantHtml, /Installation and Verification/);
+  assert.match(assistantHtml, /low confidence/);
   assert.match(assistantHtml, /Uploaded evidence excerpt/);
   assert.match(assistantHtml, /Uploaded KB/);
   assert.match(assistantHtml, /Safety \/ Evidence Controls/);
   assert.match(assistantHtml, /Restricted guidance/);
-  assert.match(assistantHtml, /Trace:/);
+  assert.doesNotMatch(assistantHtml, /Trace:/);
+  assert.doesNotMatch(assistantHtml, /trace-chat-1/);
+  assert.doesNotMatch(assistantHtml, /96% score/);
+  assert.doesNotMatch(assistantHtml, /SOP KB-MNT-045, step 4\.2 and 5\.1/);
   assert.match(assistantHtml, /Spindle bearing noise/);
   assert.match(assistantHtml, /Similar spindle noise/);
-  assert.match(assistantHtml, /No evidence is available/);
-  assert.match(assistantHtml, /Low confidence/);
+  assert.match(assistantHtml, /This answer has limited supporting evidence\. Please verify with the original document\./);
 
   const noEvidenceHtml = renderToStaticMarkup(React.createElement(AssistantPanel, {
     context,
@@ -393,9 +500,13 @@ try {
   assert.match(noEvidenceHtml, /No evidence found/);
 
   const managementHtml = renderToStaticMarkup(React.createElement(DocumentManagementPanel, {
-    documents: manifests,
+    documents: [
+      manifests[0],
+      { ...manifests[0], document_id: 'doc-knowledge-1', title: 'Knowledge Note', document_type: 'knowledge' },
+      { ...manifests[0], document_id: 'doc-other-1', title: 'Other Note', document_type: 'other' },
+    ],
     diagnostics: diagnosticsResponse,
-    ingestResult: ingestResponse,
+    ingestResult: processResponse,
     uploadResult: uploadResponse,
     isLoadingDocuments: false,
     isUploading: false,
@@ -414,11 +525,69 @@ try {
   }));
   assert.match(managementHtml, /Upload Document/);
   assert.match(managementHtml, /Document Status/);
+  assert.match(managementHtml, /Maintenance Document/);
+  assert.match(managementHtml, /Knowledge Document/);
+  assert.match(managementHtml, /Other Document/);
   assert.match(managementHtml, /Uploaded Bearing Procedure/);
-  assert.match(managementHtml, /Ingest Steps/);
-  assert.match(managementHtml, /parse/);
-  assert.match(managementHtml, /Diagnostics/);
-  assert.match(managementHtml, /trace-diagnostics-1/);
+  assert.match(managementHtml, /Processing Status/);
+  assert.match(managementHtml, /Text extracted/);
+  assert.match(managementHtml, /Process Document/);
+  assert.match(managementHtml, /Details/);
+  assert.match(managementHtml, /Ready to ask/);
+  assert.doesNotMatch(managementHtml, /trace-diagnostics-1/);
+  assert.doesNotMatch(managementHtml, /indexing_metadata/);
+  assert.doesNotMatch(managementHtml, /vector_count/);
+  assert.doesNotMatch(managementHtml, /test-embedding/);
+
+  const ocrManagementHtml = renderToStaticMarkup(React.createElement(DocumentManagementPanel, {
+    documents: [ocrManifest],
+    diagnostics: ocrDiagnosticsResponse,
+    ingestResult: null,
+    uploadResult: null,
+    isLoadingDocuments: false,
+    isUploading: false,
+    isIngesting: false,
+    isLoadingDiagnostics: false,
+    documentError: null,
+    uploadError: null,
+    ingestError: null,
+    diagnosticsError: null,
+    onUpload: async () => {},
+    onIngest: async () => {},
+    onDiagnostics: async () => {},
+    onRefresh: async () => {},
+    onSearchFiltersChange: () => {},
+    searchFilters: filters,
+  }));
+  assert.match(ocrManagementHtml, /OCR Required/);
+  assert.match(ocrManagementHtml, /Processing failed/);
+  assert.match(ocrManagementHtml, /No reliable text layer found\. OCR is required before this document can be indexed\./);
+  assert.match(ocrManagementHtml, /Processing is disabled until OCR creates a reliable text layer/);
+  assert.match(ocrManagementHtml, /We could not read the document text\./);
+
+  const ocrAssistantHtml = renderToStaticMarkup(React.createElement(AssistantPanel, {
+    context,
+    filters,
+    response: null,
+    question: 'Can I search this document?',
+    isLoading: false,
+    error: null,
+    relatedHistory: [],
+    selectedDocumentRequiresOcr: true,
+    onQuestionChange: () => {},
+    onSendQuestion: () => {},
+    onSelectQuestion: () => {},
+  }));
+  assert.match(ocrAssistantHtml, /Selected document is not searchable yet because OCR is required/);
+
+  const ocrSearchHtml = renderToStaticMarkup(React.createElement(DocumentResultList, {
+    documents: [{ ...searchResponse.items[0], requires_ocr: true }],
+    isLoading: false,
+    error: null,
+    selectedDocumentRequiresOcr: true,
+  }));
+  assert.match(ocrSearchHtml, /Selected document is not searchable yet because OCR is required/);
+  assert.match(ocrSearchHtml, /OCR Required/);
 
   const unavailable = await fetch('http://agentic-core.test/api/maintenance/kb/unavailable');
   assert.equal(unavailable.status, 503);
@@ -466,6 +635,14 @@ console.log('maintenance-kb tests passed');
 function jsonResponse(body) {
   return new Response(JSON.stringify(body), {
     status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function jsonError(body) {
+  return new Response(JSON.stringify(body), {
+    status: 400,
+    statusText: 'Bad Request',
     headers: { 'Content-Type': 'application/json' },
   });
 }

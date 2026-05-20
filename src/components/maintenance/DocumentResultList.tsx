@@ -7,14 +7,20 @@ interface DocumentResultListProps {
   documents: MaintenanceKbSearchResult[];
   isLoading: boolean;
   error?: string | null;
+  selectedDocumentRequiresOcr?: boolean;
 }
 
-export function DocumentResultList({ documents, isLoading, error }: DocumentResultListProps) {
+export function DocumentResultList({ documents, isLoading, error, selectedDocumentRequiresOcr = false }: DocumentResultListProps) {
   return (
     <section className="flex min-h-0 flex-1 flex-col border-r border-white/10 bg-[#0a0f1e]">
       <div className="shrink-0 border-b border-white/10 p-5">
         <h3 className="text-lg font-semibold text-white">Document Results</h3>
         <p className="text-xs text-slate-400">Ranked manuals, SOPs, troubleshooting guides, and history records</p>
+        {selectedDocumentRequiresOcr ? (
+          <div className="mt-3 rounded-md border border-amber-500/25 bg-amber-500/10 p-2 text-xs text-amber-100">
+            Selected document is not searchable yet because OCR is required.
+          </div>
+        ) : null}
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-5">

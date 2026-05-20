@@ -106,7 +106,9 @@ export function KnowledgeContextFilters({
                 <SelectItem value="manual" className="text-white">Manuals</SelectItem>
                 <SelectItem value="sop" className="text-white">SOPs</SelectItem>
                 <SelectItem value="history" className="text-white">History</SelectItem>
-                <SelectItem value="lessons" className="text-white">Best Practices</SelectItem>
+                <SelectItem value="lesson" className="text-white">Best Practices</SelectItem>
+                <SelectItem value="knowledge" className="text-white">Knowledge</SelectItem>
+                <SelectItem value="other" className="text-white">Other</SelectItem>
               </SelectContent>
             </Select>
           </div>
