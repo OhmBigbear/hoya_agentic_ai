@@ -70,6 +70,44 @@ globalThis.fetch = async (url, init = {}) => {
     });
   }
 
+  if (String(url).includes('/api/maintenance/kb/documents/doc-upload-400/process')) {
+    assert.equal(init.method, 'POST');
+    return jsonError({
+      detail: {
+        stage: 'ocr',
+        error_code: 'OCR_FAILED',
+        message: 'OCR worker failed while extracting text.',
+        retryable: true,
+        recoverable: true,
+      },
+    });
+  }
+
+  if (String(url).includes('/api/maintenance/kb/documents/doc-indexing-400/process')) {
+    assert.equal(init.method, 'POST');
+    return jsonError({
+      stage: 'indexing',
+      error_code: 'INDEXING_FAILED',
+      message: 'Vector index write failed.',
+      retryable: true,
+      recoverable: true,
+    });
+  }
+
+  if (String(url).includes('/api/maintenance/kb/documents/doc-timeout/process')) {
+    assert.equal(init.method, 'POST');
+    return new Promise((_, reject) => {
+      if (init.signal?.aborted) {
+        reject(new DOMException('Aborted', 'AbortError'));
+        return;
+      }
+
+      init.signal?.addEventListener('abort', () => {
+        reject(new DOMException('Aborted', 'AbortError'));
+      }, { once: true });
+    });
+  }
+
   if (String(url).includes('/api/maintenance/kb/documents/doc-upload-1/diagnostics')) {
     assert.equal(init.method, 'GET');
     return jsonResponse({
@@ -125,6 +163,14 @@ globalThis.fetch = async (url, init = {}) => {
     }
     if (body.query === '__unsupported_file__') {
       return jsonError({ error_code: 'UNSUPPORTED_FILE', detail: 'Unsupported file.' });
+    }
+    if (body.query === '__structured_detail__') {
+      return jsonError({
+        detail: {
+          message: 'Document metadata is missing a machine.',
+          field: 'machine',
+        },
+      });
     }
 
     return jsonResponse({
@@ -231,6 +277,9 @@ try {
     toMaintenanceKbSearchApiRequest,
     toMaintenanceKbChatApiRequest,
     normalizeMaintenanceKbUploadMetadata,
+    formatMaintenanceKbError,
+    DOCUMENT_PROCESS_TIMEOUT_MS,
+    DOCUMENT_PROCESS_TIMEOUT_MESSAGE,
   } = await server.ssrLoadModule('/src/services/maintenanceKbApi.ts');
 
   const context = await getMaintenanceKbContext();
@@ -268,6 +317,7 @@ try {
   assert.match(fetchCalls[4].url, /\/api\/maintenance\/kb\/documents\?line=rx1-surfacing/);
   assert.equal(fetchCalls[5].url, 'http://agentic-core.test/api/maintenance/kb/documents/doc-upload-1/process');
   assert.equal(fetchCalls[6].url, 'http://agentic-core.test/api/maintenance/kb/documents/doc-upload-1/diagnostics');
+  assert.equal(DOCUMENT_PROCESS_TIMEOUT_MS, 240000);
 
   const uploadFormData = fetchCalls[3].init.body;
   const uploadMetadata = JSON.parse(uploadFormData.get('metadata'));
@@ -414,6 +464,55 @@ try {
     () => searchMaintenanceKbDocuments({ ...filters, query: '__unsupported_file__' }),
     /This file type is not supported yet\./,
   );
+  await assert.rejects(
+    () => searchMaintenanceKbDocuments({ ...filters, query: '__structured_detail__' }),
+    (error) => {
+      assert.match(error.message, /Document metadata is missing a machine\./);
+      assert.doesNotMatch(error.message, /\[object Object\]/);
+      return true;
+    },
+  );
+  await assert.rejects(
+    () => processDocument('doc-upload-400'),
+    (error) => {
+      assert.match(error.message, /We could not read the document text\./);
+      assert.doesNotMatch(error.message, /\[object Object\]/);
+      return true;
+    },
+  );
+  await assert.rejects(
+    () => processDocument('doc-indexing-400'),
+    (error) => {
+      assert.match(error.message, /We could not build the searchable index\./);
+      assert.doesNotMatch(error.message, /\[object Object\]/);
+      return true;
+    },
+  );
+  const originalSetTimeout = globalThis.setTimeout;
+  const timeoutDelays = [];
+  globalThis.setTimeout = (callback, delay, ...args) => {
+    timeoutDelays.push(delay);
+    return originalSetTimeout(callback, delay === DOCUMENT_PROCESS_TIMEOUT_MS ? 0 : delay, ...args);
+  };
+  try {
+    await assert.rejects(
+      () => processDocument('doc-timeout'),
+      (error) => {
+        assert.equal(error.message, DOCUMENT_PROCESS_TIMEOUT_MESSAGE);
+        assert.doesNotMatch(error.message, /Maintenance KB backend request timed out/);
+        return true;
+      },
+    );
+    assert.deepEqual(timeoutDelays, [DOCUMENT_PROCESS_TIMEOUT_MS]);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+  }
+  assert.equal(formatMaintenanceKbError({ detail: { message: 'Readable detail message.' } }), 'Readable detail message.');
+  assert.equal(formatMaintenanceKbError({ error: { message: 'Readable error message.' } }), 'Readable error message.');
+  assert.equal(formatMaintenanceKbError({ message: 'Readable top-level message.' }), 'Readable top-level message.');
+  assert.equal(formatMaintenanceKbError({ stage: 'chunking', error_code: 'CHUNKING_FAILED', message: 'Chunker failed.' }), 'We could not prepare this document for search.');
+  assert.equal(formatMaintenanceKbError({ stage: 'unsupported_file', message: 'MIME type rejected.' }), 'This file type is not supported yet.');
+  assert.notEqual(formatMaintenanceKbError({ detail: { field: 'machine' } }), '[object Object]');
 
   const pageHtml = renderToStaticMarkup(React.createElement(MaintenanceKnowledgeBasePage, { sidebarCollapsed: true }));
   assert.match(pageHtml, /Maintenance Knowledge Base/);
@@ -564,6 +663,53 @@ try {
   assert.match(ocrManagementHtml, /No reliable text layer found\. OCR is required before this document can be indexed\./);
   assert.match(ocrManagementHtml, /Processing is disabled until OCR creates a reliable text layer/);
   assert.match(ocrManagementHtml, /We could not read the document text\./);
+
+  const processErrorManagementHtml = renderToStaticMarkup(React.createElement(DocumentManagementPanel, {
+    documents: [manifests[0]],
+    diagnostics: null,
+    ingestResult: null,
+    uploadResult: null,
+    isLoadingDocuments: false,
+    isUploading: false,
+    isIngesting: false,
+    isLoadingDiagnostics: false,
+    documentError: null,
+    uploadError: null,
+    ingestError: 'Maintenance KB backend request failed (400 Bad Request): We could not read the document text.',
+    diagnosticsError: null,
+    onUpload: async () => {},
+    onIngest: async () => {},
+    onDiagnostics: async () => {},
+    onRefresh: async () => {},
+    onSearchFiltersChange: () => {},
+    searchFilters: filters,
+  }));
+  assert.match(processErrorManagementHtml, /We could not read the document text\./);
+  assert.doesNotMatch(processErrorManagementHtml, /\[object Object\]/);
+
+  const processingManagementHtml = renderToStaticMarkup(React.createElement(DocumentManagementPanel, {
+    documents: [manifests[0]],
+    diagnostics: null,
+    ingestResult: null,
+    uploadResult: null,
+    isLoadingDocuments: false,
+    isUploading: false,
+    isIngesting: true,
+    isLoadingDiagnostics: false,
+    documentError: null,
+    uploadError: null,
+    ingestError: null,
+    diagnosticsError: null,
+    onUpload: async () => {},
+    onIngest: async () => {},
+    onDiagnostics: async () => {},
+    onRefresh: async () => {},
+    onSearchFiltersChange: () => {},
+    searchFilters: filters,
+  }));
+  assert.match(processingManagementHtml, /Processing document\. This may take a few minutes for scanned PDFs\./);
+  assert.match(processingManagementHtml, /<button[^>]*disabled=""[^>]*>[\s\S]*Process Document/);
+  assert.doesNotMatch(processingManagementHtml, /Maintenance KB backend request timed out/);
 
   const ocrAssistantHtml = renderToStaticMarkup(React.createElement(AssistantPanel, {
     context,

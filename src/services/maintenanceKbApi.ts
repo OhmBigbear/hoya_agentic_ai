@@ -20,6 +20,8 @@ import type {
 
 const DEFAULT_API_BASE_URL = 'http://localhost:8100';
 const REQUEST_TIMEOUT_MS = 12_000;
+export const DOCUMENT_PROCESS_TIMEOUT_MS = 240_000;
+export const DOCUMENT_PROCESS_TIMEOUT_MESSAGE = 'Document processing is taking longer than expected. Please refresh the document status in a moment.';
 const MAINTENANCE_KB_ENDPOINTS = {
   context: '/api/maintenance/kb/context',
   documents: '/api/maintenance/kb/documents',
@@ -180,6 +182,10 @@ type ChatApiRequest = {
 };
 
 type QueryParams = Record<string, string | number | boolean | undefined>;
+type RequestJsonOptions = {
+  timeoutMs?: number;
+  timeoutMessage?: string;
+};
 
 function getApiBaseUrl(): string {
   return (import.meta.env.VITE_AGENTIC_CORE_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/+$/, '');
@@ -205,9 +211,9 @@ function buildUrl(path: string, params?: QueryParams): string {
   return url.toString();
 }
 
-async function requestJson<T>(path: string, init?: RequestInit, params?: QueryParams): Promise<T> {
+async function requestJson<T>(path: string, init?: RequestInit, params?: QueryParams, options: RequestJsonOptions = {}): Promise<T> {
   const controller = new AbortController();
-  const timeoutId = globalThis.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), options.timeoutMs ?? REQUEST_TIMEOUT_MS);
   const isFormData = init?.body instanceof FormData;
 
   try {
@@ -229,7 +235,7 @@ async function requestJson<T>(path: string, init?: RequestInit, params?: QueryPa
     return response.json() as Promise<T>;
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error('Maintenance KB backend request timed out. Please retry or enable mock fallback for local development.');
+      throw new Error(options.timeoutMessage ?? 'Maintenance KB backend request timed out. Please retry or enable mock fallback for local development.');
     }
 
     if (error instanceof TypeError) {
@@ -247,47 +253,126 @@ function formatHttpError(status: number, statusText: string, body: string): stri
     return 'Maintenance KB backend returned 503. The safe backend error state is active; please retry after the service is healthy.';
   }
 
-  const detail = toUserFriendlyError(parseErrorDetail(body));
+  const parsed = parseErrorBody(body);
+  const detail = formatMaintenanceKbError(parsed ?? body, statusText);
+  if (body) {
+    console.debug('Maintenance KB backend error detail', parsed ?? body);
+  }
+
   return `Maintenance KB backend request failed (${status} ${statusText})${detail ? `: ${detail}` : ''}`;
 }
 
-function parseErrorDetail(body: string): string {
+function parseErrorBody(body: string): unknown {
   if (!body) {
-    return '';
+    return undefined;
   }
 
   try {
-    const parsed = JSON.parse(body) as { detail?: unknown; message?: unknown; error?: unknown; code?: unknown; error_code?: unknown; stage?: unknown };
-    const detail = parsed.detail ?? parsed.message ?? parsed.error;
-    const parts = [parsed.code, parsed.error_code, parsed.stage, detail]
-      .filter((value) => value !== undefined && value !== null && value !== '')
-      .map(String);
-    return parts.length ? parts.join(' ') : body;
+    return JSON.parse(body);
   } catch {
     return body;
   }
 }
 
-function toUserFriendlyError(detail: string): string {
-  const normalized = detail.toLowerCase();
+export function formatMaintenanceKbError(error: unknown, fallback = 'Request failed'): string {
+  const message = extractMaintenanceKbErrorMessage(error);
+  const friendly = toUserFriendlyError(error, message);
+
+  if (friendly && friendly !== '[object Object]') {
+    return friendly;
+  }
+
+  return fallback;
+}
+
+function extractMaintenanceKbErrorMessage(error: unknown): string | undefined {
+  if (error instanceof Error) {
+    return cleanErrorMessage(error.message);
+  }
+
+  if (typeof error === 'string') {
+    const parsed = parseErrorBody(error);
+    if (parsed !== error) {
+      return extractMaintenanceKbErrorMessage(parsed);
+    }
+
+    return cleanErrorMessage(error);
+  }
+
+  const record = getRecord(error);
+  if (!Object.keys(record).length) {
+    return undefined;
+  }
+
+  return (
+    getNestedString(record.detail, 'message') ??
+    getNestedString(record.error, 'message') ??
+    getString(record, 'message') ??
+    getString(record, 'detail') ??
+    getString(record, 'error')
+  );
+}
+
+function getNestedString(value: unknown, key: string): string | undefined {
+  const record = getRecord(value);
+  return Object.keys(record).length ? getString(record, key) : undefined;
+}
+
+function cleanErrorMessage(message: string | undefined): string | undefined {
+  const trimmed = message?.trim();
+  if (!trimmed || trimmed === '[object Object]') {
+    return undefined;
+  }
+
+  return trimmed;
+}
+
+function toUserFriendlyError(error: unknown, message: string | undefined): string | undefined {
+  const normalized = [
+    message,
+    ...collectErrorMarkers(error),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
 
   if (/unsupported.*file|file.*unsupported|unsupported_file|unsupported file type/.test(normalized)) {
     return 'This file type is not supported yet.';
   }
 
-  if (/ocr.*fail|ocr_failed|ocr required|could not read|extract.*text|text layer/.test(normalized)) {
+  if (/\bocr\b|ocr.*fail|ocr_failed|ocr required|could not read|extract.*text|text layer/.test(normalized)) {
     return 'We could not read the document text.';
   }
 
-  if (/chunk.*fail|chunking_failed|prepare.*search|prepare.*document/.test(normalized)) {
+  if (/\bchunking\b|chunk.*fail|chunking_failed|prepare.*search|prepare.*document/.test(normalized)) {
     return 'We could not prepare this document for search.';
   }
 
-  if (/index.*fail|indexing_failed|searchable index|embedding.*fail/.test(normalized)) {
+  if (/\bindexing\b|index.*fail|indexing_failed|searchable index|embedding.*fail/.test(normalized)) {
     return 'We could not build the searchable index.';
   }
 
-  return detail;
+  return message;
+}
+
+function collectErrorMarkers(error: unknown): string[] {
+  if (typeof error === 'string') {
+    const parsed = parseErrorBody(error);
+    return parsed === error ? [] : collectErrorMarkers(parsed);
+  }
+
+  const record = getRecord(error);
+  if (!Object.keys(record).length) {
+    return [];
+  }
+
+  return [
+    getString(record, 'stage'),
+    getString(record, 'error_code'),
+    getString(record, 'code'),
+    ...collectErrorMarkers(record.detail),
+    ...collectErrorMarkers(record.error),
+  ].filter((value): value is string => Boolean(value));
 }
 
 function toBackendFilters(request: MaintenanceKbSearchRequest): SearchApiRequest['filters'] {
@@ -688,6 +773,9 @@ export async function ingestDocument(documentId: string): Promise<IngestResponse
 export async function processDocument(documentId: string): Promise<IngestResponse> {
   const response = await requestJson<unknown>(`${MAINTENANCE_KB_ENDPOINTS.documents}/${encodeURIComponent(documentId)}/process`, {
     method: 'POST',
+  }, undefined, {
+    timeoutMs: DOCUMENT_PROCESS_TIMEOUT_MS,
+    timeoutMessage: DOCUMENT_PROCESS_TIMEOUT_MESSAGE,
   });
   return normalizeIngestResponse(response, documentId);
 }

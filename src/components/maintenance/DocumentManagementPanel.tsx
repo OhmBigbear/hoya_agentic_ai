@@ -31,6 +31,7 @@ import type {
 const supportedExtensions = ['pdf', 'txt', 'docx', 'csv', 'xlsx'];
 const supportedUploadDocumentTypes: Array<MaintenanceKbDocumentMetadata['document_type']> = ['maintenance', 'knowledge', 'other'];
 const ocrRequiredMessage = 'No reliable text layer found. OCR is required before this document can be indexed.';
+const documentProcessingMessage = 'Processing document. This may take a few minutes for scanned PDFs.';
 const documentTypeLabels: Record<string, string> = {
   maintenance: 'Maintenance Document',
   knowledge: 'Knowledge Document',
@@ -260,6 +261,7 @@ export function DocumentManagementPanel({
             </div>
           </div>
 
+          {isIngesting ? <StatusMessage message={documentProcessingMessage} tone="info" /> : null}
           <StatusMessage message={documentError ?? ingestError ?? diagnosticsError} tone="error" />
           <div className="min-h-0">
             {documents.length === 0 && !isLoadingDocuments && !documentError ? (
@@ -542,14 +544,21 @@ function hasOcrRequiredWarning(warnings: string[] | undefined): boolean {
   return warnings?.some((warning) => /ocr|text layer|extractable text/i.test(warning)) ?? false;
 }
 
-function StatusMessage({ message, tone }: { message?: string | null; tone: 'error' | 'success' }) {
+function StatusMessage({ message, tone }: { message?: string | null; tone: 'error' | 'success' | 'info' }) {
   if (!message) {
     return null;
   }
 
+  const toneClassName = tone === 'error'
+    ? 'border-red-500/25 bg-red-500/10 text-red-100'
+    : tone === 'success'
+      ? 'border-green-500/25 bg-green-500/10 text-green-100'
+      : 'border-cyan-500/25 bg-cyan-500/10 text-cyan-100';
+  const Icon = tone === 'error' ? AlertTriangle : tone === 'success' ? CheckCircle2 : Loader2;
+
   return (
-    <div className={`mt-3 flex gap-2 rounded-md border p-2 text-xs ${tone === 'error' ? 'border-red-500/25 bg-red-500/10 text-red-100' : 'border-green-500/25 bg-green-500/10 text-green-100'}`}>
-      {tone === 'error' ? <AlertTriangle className="h-4 w-4 shrink-0" /> : <CheckCircle2 className="h-4 w-4 shrink-0" />}
+    <div className={`mt-3 flex gap-2 rounded-md border p-2 text-xs ${toneClassName}`}>
+      <Icon className={`h-4 w-4 shrink-0 ${tone === 'info' ? 'animate-spin' : ''}`} />
       <span>{message}</span>
     </div>
   );
