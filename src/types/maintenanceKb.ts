@@ -89,6 +89,9 @@ export interface MaintenanceKbSearchResult {
   excerpt?: string;
   source_origin?: MaintenanceKbSourceOrigin;
   requires_ocr?: boolean;
+  final_status?: MaintenanceKbDocumentStatus;
+  processing_status?: MaintenanceKbDocumentStatus;
+  ocr_status?: MaintenanceKbDocumentStatus;
   metadata?: MaintenanceKbMetadata;
 }
 
@@ -194,6 +197,9 @@ export interface DocumentManifest {
   source_origin?: MaintenanceKbSourceOrigin;
   checksum?: string;
   requires_ocr?: boolean;
+  final_status?: MaintenanceKbDocumentStatus;
+  processing_status?: MaintenanceKbDocumentStatus;
+  ocr_status?: MaintenanceKbDocumentStatus;
   warnings?: string[];
   metadata?: MaintenanceKbMetadata;
 }
@@ -226,6 +232,9 @@ export interface DiagnosticsResponse {
   document_id: string;
   status?: MaintenanceKbDocumentStatus;
   manifest_status?: MaintenanceKbDocumentStatus;
+  final_status?: MaintenanceKbDocumentStatus;
+  processing_status?: MaintenanceKbDocumentStatus;
+  ocr_status?: MaintenanceKbDocumentStatus;
   requires_ocr?: boolean;
   last_error?: string;
   file_exists?: boolean;

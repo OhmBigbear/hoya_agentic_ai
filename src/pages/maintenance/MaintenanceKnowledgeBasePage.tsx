@@ -169,7 +169,7 @@ export function MaintenanceKnowledgeBasePage({
   }, [context, filters]);
 
   const contextForPanel = useMemo(() => context ?? undefined, [context]);
-  const selectedDocumentRequiresOcr = diagnostics?.requires_ocr === true;
+  const selectedDocumentRequiresOcr = shouldTreatDiagnosticsAsOcrRequired(diagnostics);
 
   useEffect(() => {
     if (!uploadNotice) {
@@ -237,7 +237,7 @@ export function MaintenanceKnowledgeBasePage({
   };
 
   const handleIngest = async (documentId: string) => {
-    if (diagnostics?.document_id === documentId && diagnostics.requires_ocr) {
+    if (diagnostics?.document_id === documentId && shouldTreatDiagnosticsAsOcrRequired(diagnostics)) {
       setIngestError('Processing is disabled for this document because OCR is required before indexing.');
       return;
     }
@@ -348,6 +348,19 @@ export function MaintenanceKnowledgeBasePage({
       </div>
     </main>
   );
+}
+
+function shouldTreatDiagnosticsAsOcrRequired(diagnostics: DiagnosticsResponse | null): boolean {
+  if (!diagnostics?.requires_ocr) {
+    return false;
+  }
+
+  const statuses = [diagnostics.final_status, diagnostics.processing_status, diagnostics.status, diagnostics.manifest_status];
+  if (statuses.some((status) => status && /^(parsed|chunked|indexed|ready|active|ocr_completed|completed|success)$/i.test(status))) {
+    return false;
+  }
+
+  return !diagnostics.ocr_status || !/^(native_text|native_text_success|skipped|ocr_skipped|completed|ocr_completed|success)$/i.test(diagnostics.ocr_status);
 }
 
 function UploadNotice({ tone, message }: { tone: 'success' | 'error'; message: string }) {

@@ -23,6 +23,7 @@ import type {
   DiagnosticsResponse,
   DocumentManifest,
   IngestResponse,
+  MaintenanceKbDocumentStatus,
   MaintenanceKbDocumentMetadata,
   MaintenanceKbSearchRequest,
   UploadResponse,
@@ -48,15 +49,15 @@ const processingStatusLabels: Record<string, string> = {
   queued: 'Waiting to process',
   parsing: 'Reading document',
   ocr_processing: 'Reading document',
-  parsed: 'Text extracted',
-  ocr_completed: 'Text extracted',
+  parsed: 'Parsed',
+  ocr_completed: 'Parsed',
   chunking: 'Preparing knowledge',
-  chunked: 'Knowledge prepared',
+  chunked: 'Ready for Indexing',
   embedding: 'Building search index',
-  indexed: 'Ready to ask',
-  ready: 'Ready to ask',
-  active: 'Ready to ask',
-  failed: 'Processing failed',
+  indexed: 'Ready for AI Search',
+  ready: 'Ready for AI Search',
+  active: 'Ready for AI Search',
+  failed: 'Processing Failed',
 };
 
 const defaultMetadata: MaintenanceKbDocumentMetadata = {
@@ -345,8 +346,11 @@ function DocumentRow({
   onIngest: (documentId: string) => Promise<void>;
   onDiagnostics: (documentId: string) => Promise<void>;
 }) {
-  const requiresOcr = document.requires_ocr === true || diagnostics?.requires_ocr === true || hasOcrRequiredWarning(document.warnings);
-  const statusLabel = requiresOcr ? 'Processing failed' : getProcessingStatusLabel(document.status);
+  const effectiveStatus = getEffectiveDocumentStatus(document, diagnostics);
+  const hasLifecycleSuccess = isSuccessfulLifecycleStatus(effectiveStatus);
+  const requiresOcr = !hasLifecycleSuccess && shouldShowOcrRequired(document, diagnostics);
+  const statusLabel = getProcessingStatusLabel(effectiveStatus);
+  const visibleWarnings = filterVisibleWarnings(document.warnings, hasLifecycleSuccess);
 
   return (
     <div className="rounded-md border border-white/10 bg-[#101827] p-3">
@@ -367,8 +371,8 @@ function DocumentRow({
             {document.version ? <span>{document.version}</span> : null}
             {document.uploaded_at ? <span>Uploaded {document.uploaded_at}</span> : null}
           </div>
-          {document.warnings?.length ? (
-            <div className="mt-2 text-xs text-amber-200">{document.warnings.map(toUserFriendlyProcessingMessage).join(', ')}</div>
+          {visibleWarnings.length ? (
+            <div className="mt-2 text-xs text-amber-200">{visibleWarnings.map(toUserFriendlyProcessingMessage).join(', ')}</div>
           ) : null}
           {requiresOcr ? (
             <div className="mt-2 flex gap-2 rounded-md border border-amber-500/25 bg-amber-500/10 p-2 text-xs text-amber-100">
@@ -417,11 +421,15 @@ function DiagnosticsBlock({
   title?: string;
   filename?: string;
 }) {
+  const effectiveStatus = getEffectiveDiagnosticsStatus(diagnostics);
+  const hasLifecycleSuccess = isSuccessfulLifecycleStatus(effectiveStatus);
+  const requiresOcr = !hasLifecycleSuccess && diagnostics.requires_ocr === true && !indicatesNativeTextOrOcrSuccess(diagnostics.ocr_status);
+  const visibleWarnings = filterVisibleWarnings(diagnostics.warnings, hasLifecycleSuccess);
   const checks = [
-    ['Status', getProcessingStatusLabel(diagnostics.status ?? diagnostics.manifest_status)],
-    ['Text extracted', formatBoolean(diagnostics.parsed_exists ?? diagnostics.parsed_artifact_exists)],
-    ['Knowledge prepared', formatBoolean(diagnostics.chunks_exists ?? diagnostics.chunk_artifact_exists)],
-    ['Ready to ask', formatBoolean(diagnostics.active ?? diagnostics.indexed)],
+    ['Status', getProcessingStatusLabel(effectiveStatus)],
+    ['Parsed', formatBoolean(diagnostics.parsed_exists ?? diagnostics.parsed_artifact_exists)],
+    ['Ready for Indexing', formatBoolean(diagnostics.chunks_exists ?? diagnostics.chunk_artifact_exists)],
+    ['Ready for AI Search', formatBoolean(diagnostics.active ?? diagnostics.indexed)],
   ];
 
   return (
@@ -430,12 +438,12 @@ function DiagnosticsBlock({
         <Search className="h-4 w-4 text-cyan-300" />
         <span className="text-sm font-semibold text-white">{title ?? diagnostics.document_id}</span>
         {filename ? <span className="text-xs text-slate-500">{filename}</span> : null}
-        {diagnostics.status || diagnostics.manifest_status ? (
-          <Badge className="border-white/10 bg-white/5 text-slate-300">{getProcessingStatusLabel(diagnostics.status ?? diagnostics.manifest_status)}</Badge>
+        {effectiveStatus ? (
+          <Badge className="border-white/10 bg-white/5 text-slate-300">{getProcessingStatusLabel(effectiveStatus)}</Badge>
         ) : null}
-        {diagnostics.requires_ocr ? <OcrRequiredBadge /> : null}
+        {requiresOcr ? <OcrRequiredBadge /> : null}
       </div>
-      {diagnostics.requires_ocr ? (
+      {requiresOcr ? (
         <div className="mb-3 flex gap-2 rounded-md border border-amber-500/25 bg-amber-500/10 p-2 text-xs text-amber-100">
           <AlertTriangle className="h-4 w-4 shrink-0" />
           <span>{ocrRequiredMessage}</span>
@@ -449,7 +457,7 @@ function DiagnosticsBlock({
           </div>
         ))}
       </div>
-      {diagnostics.last_error ? (
+      {diagnostics.last_error && !hasLifecycleSuccess ? (
         <div className="mt-3 rounded-md border border-red-500/25 bg-red-500/10 p-3 text-xs text-red-100">
           <div className="mb-1 font-semibold uppercase text-red-200">Processing message</div>
           <div className="break-words">{toUserFriendlyProcessingMessage(diagnostics.last_error)}</div>
@@ -457,9 +465,9 @@ function DiagnosticsBlock({
       ) : null}
       <div className="mt-3 rounded-md border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-100">
         <div className="mb-1 font-semibold uppercase text-amber-200">Warnings</div>
-        {diagnostics.warnings?.length ? (
+        {visibleWarnings.length ? (
           <ul className="space-y-1">
-            {diagnostics.warnings.map((warning) => (
+            {visibleWarnings.map((warning) => (
               <li key={warning} className="break-words">{toUserFriendlyProcessingMessage(warning)}</li>
             ))}
           </ul>
@@ -542,6 +550,71 @@ function OriginBadge({ origin, fallbackOrigin }: { origin?: string; fallbackOrig
 
 function hasOcrRequiredWarning(warnings: string[] | undefined): boolean {
   return warnings?.some((warning) => /ocr|text layer|extractable text/i.test(warning)) ?? false;
+}
+
+function hasProcessingWarning(warning: string): boolean {
+  return /ocr|required|fail|failed|error|could not read|text layer|extractable text/i.test(warning);
+}
+
+function filterVisibleWarnings(warnings: string[] | undefined, hasLifecycleSuccess: boolean): string[] {
+  if (!warnings?.length) {
+    return [];
+  }
+
+  return hasLifecycleSuccess ? warnings.filter((warning) => !hasProcessingWarning(warning)) : warnings;
+}
+
+function isSuccessfulLifecycleStatus(status: string | undefined): boolean {
+  return status ? /^(parsed|chunked|indexed|ready|active|ocr_completed|completed|success)$/i.test(status) : false;
+}
+
+function isSuccessfulFinalStatus(status: string | undefined): boolean {
+  return status ? /^(parsed|chunked|indexed|ready|active|completed|success)$/i.test(status) : false;
+}
+
+function indicatesNativeTextOrOcrSuccess(status: string | undefined): boolean {
+  return status ? /^(native_text|native_text_success|skipped|ocr_skipped|completed|ocr_completed|success)$/i.test(status) : false;
+}
+
+function getEffectiveStatus(...statuses: Array<string | undefined>): MaintenanceKbDocumentStatus | undefined {
+  const successfulStatus = statuses.find(isSuccessfulLifecycleStatus);
+  return (successfulStatus ?? statuses.find(Boolean)) as MaintenanceKbDocumentStatus | undefined;
+}
+
+function getEffectiveDocumentStatus(document: DocumentManifest, diagnostics: DiagnosticsResponse | null): MaintenanceKbDocumentStatus | undefined {
+  return getEffectiveStatus(
+    diagnostics?.final_status,
+    document.final_status,
+    diagnostics?.processing_status,
+    document.processing_status,
+    diagnostics?.status,
+    diagnostics?.manifest_status,
+    document.status,
+  );
+}
+
+function getEffectiveDiagnosticsStatus(diagnostics: DiagnosticsResponse): MaintenanceKbDocumentStatus | undefined {
+  return getEffectiveStatus(
+    diagnostics.final_status,
+    diagnostics.processing_status,
+    diagnostics.status,
+    diagnostics.manifest_status,
+  );
+}
+
+function shouldShowOcrRequired(document: DocumentManifest, diagnostics: DiagnosticsResponse | null): boolean {
+  const ocrStatus = diagnostics?.ocr_status ?? document.ocr_status;
+  const hasTextSuccess = indicatesNativeTextOrOcrSuccess(ocrStatus)
+    || isSuccessfulFinalStatus(diagnostics?.final_status)
+    || isSuccessfulFinalStatus(document.final_status)
+    || isSuccessfulLifecycleStatus(diagnostics?.processing_status)
+    || isSuccessfulLifecycleStatus(document.processing_status);
+
+  if (hasTextSuccess) {
+    return false;
+  }
+
+  return document.requires_ocr === true || diagnostics?.requires_ocr === true || hasOcrRequiredWarning(document.warnings);
 }
 
 function StatusMessage({ message, tone }: { message?: string | null; tone: 'error' | 'success' | 'info' }) {

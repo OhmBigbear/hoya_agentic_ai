@@ -629,10 +629,10 @@ try {
   assert.match(managementHtml, /Other Document/);
   assert.match(managementHtml, /Uploaded Bearing Procedure/);
   assert.match(managementHtml, /Processing Status/);
-  assert.match(managementHtml, /Text extracted/);
+  assert.match(managementHtml, /Parsed/);
   assert.match(managementHtml, /Process Document/);
   assert.match(managementHtml, /Details/);
-  assert.match(managementHtml, /Ready to ask/);
+  assert.match(managementHtml, /Ready for AI Search/);
   assert.doesNotMatch(managementHtml, /trace-diagnostics-1/);
   assert.doesNotMatch(managementHtml, /indexing_metadata/);
   assert.doesNotMatch(managementHtml, /vector_count/);
@@ -659,10 +659,47 @@ try {
     searchFilters: filters,
   }));
   assert.match(ocrManagementHtml, /OCR Required/);
-  assert.match(ocrManagementHtml, /Processing failed/);
+  assert.match(ocrManagementHtml, /Processing Failed/);
   assert.match(ocrManagementHtml, /No reliable text layer found\. OCR is required before this document can be indexed\./);
   assert.match(ocrManagementHtml, /Processing is disabled until OCR creates a reliable text layer/);
   assert.match(ocrManagementHtml, /We could not read the document text\./);
+
+  const normalizedSuccessManagementHtml = renderToStaticMarkup(React.createElement(DocumentManagementPanel, {
+    documents: [{
+      ...ocrManifest,
+      final_status: 'indexed',
+      processing_status: 'chunked',
+      ocr_status: 'skipped',
+    }],
+    diagnostics: {
+      ...ocrDiagnosticsResponse,
+      final_status: 'indexed',
+      processing_status: 'chunked',
+      ocr_status: 'skipped',
+      indexed: true,
+      active: true,
+    },
+    ingestResult: null,
+    uploadResult: null,
+    isLoadingDocuments: false,
+    isUploading: false,
+    isIngesting: false,
+    isLoadingDiagnostics: false,
+    documentError: null,
+    uploadError: null,
+    ingestError: null,
+    diagnosticsError: null,
+    onUpload: async () => {},
+    onIngest: async () => {},
+    onDiagnostics: async () => {},
+    onRefresh: async () => {},
+    onSearchFiltersChange: () => {},
+    searchFilters: filters,
+  }));
+  assert.match(normalizedSuccessManagementHtml, /Ready for AI Search/);
+  assert.doesNotMatch(normalizedSuccessManagementHtml, /OCR Required/);
+  assert.doesNotMatch(normalizedSuccessManagementHtml, /Processing Failed/);
+  assert.doesNotMatch(normalizedSuccessManagementHtml, /We could not read the document text\./);
 
   const processErrorManagementHtml = renderToStaticMarkup(React.createElement(DocumentManagementPanel, {
     documents: [manifests[0]],
@@ -734,6 +771,15 @@ try {
   }));
   assert.match(ocrSearchHtml, /Selected document is not searchable yet because OCR is required/);
   assert.match(ocrSearchHtml, /OCR Required/);
+
+  const normalizedSuccessSearchHtml = renderToStaticMarkup(React.createElement(DocumentResultList, {
+    documents: [{ ...searchResponse.items[0], requires_ocr: true, final_status: 'indexed', processing_status: 'indexed', ocr_status: 'completed' }],
+    isLoading: false,
+    error: null,
+    selectedDocumentRequiresOcr: false,
+  }));
+  assert.doesNotMatch(normalizedSuccessSearchHtml, /OCR Required/);
+  assert.doesNotMatch(normalizedSuccessSearchHtml, /Selected document is not searchable yet because OCR is required/);
 
   const unavailable = await fetch('http://agentic-core.test/api/maintenance/kb/unavailable');
   assert.equal(unavailable.status, 503);

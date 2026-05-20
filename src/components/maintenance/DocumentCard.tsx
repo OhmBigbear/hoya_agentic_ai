@@ -20,7 +20,7 @@ const documentTypeLabels: Record<MaintenanceKbSearchResult['document_type'], str
 const ocrRequiredMessage = 'No reliable text layer found. OCR is required before this document can be indexed.';
 
 export function DocumentCard({ document }: DocumentCardProps) {
-  const requiresOcr = document.requires_ocr === true;
+  const requiresOcr = shouldShowOcrRequired(document);
 
   return (
     <Card className="border-white/10 bg-[#141b2e] transition-colors hover:border-cyan-500/40">
@@ -58,6 +58,40 @@ export function DocumentCard({ document }: DocumentCardProps) {
       </CardContent>
     </Card>
   );
+}
+
+function shouldShowOcrRequired(document: MaintenanceKbSearchResult): boolean {
+  const metadata = document.metadata ?? {};
+  const finalStatus = document.final_status ?? getMetadataString(metadata, 'final_status');
+  const processingStatus = document.processing_status ?? getMetadataString(metadata, 'processing_status');
+  const ocrStatus = document.ocr_status ?? getMetadataString(metadata, 'ocr_status');
+
+  if (
+    isSuccessfulFinalStatus(finalStatus)
+    || isSuccessfulLifecycleStatus(processingStatus)
+    || indicatesNativeTextOrOcrSuccess(ocrStatus)
+  ) {
+    return false;
+  }
+
+  return document.requires_ocr === true;
+}
+
+function getMetadataString(metadata: Record<string, unknown>, key: string): string | undefined {
+  const value = metadata[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function isSuccessfulLifecycleStatus(status: string | undefined): boolean {
+  return status ? /^(parsed|chunked|indexed|ready|active|ocr_completed|completed|success)$/i.test(status) : false;
+}
+
+function isSuccessfulFinalStatus(status: string | undefined): boolean {
+  return status ? /^(parsed|chunked|indexed|ready|active|completed|success)$/i.test(status) : false;
+}
+
+function indicatesNativeTextOrOcrSuccess(status: string | undefined): boolean {
+  return status ? /^(native_text|native_text_success|skipped|ocr_skipped|completed|ocr_completed|success)$/i.test(status) : false;
 }
 
 function OriginBadge({ origin }: { origin?: string }) {

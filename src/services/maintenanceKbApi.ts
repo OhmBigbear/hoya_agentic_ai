@@ -491,6 +491,9 @@ function normalizeDocument(item: Partial<MaintenanceKbSearchResult> & Record<str
     excerpt: typeof item.excerpt === 'string' ? item.excerpt : undefined,
     source_origin: getString(item, 'source_origin') ?? getString(metadata, 'source_origin'),
     requires_ocr: getBoolean(item, 'requires_ocr') ?? getBoolean(metadata, 'requires_ocr'),
+    final_status: getString(item, 'final_status') ?? getString(metadata, 'final_status'),
+    processing_status: getString(item, 'processing_status') ?? getString(metadata, 'processing_status'),
+    ocr_status: getString(item, 'ocr_status') ?? getString(metadata, 'ocr_status'),
     metadata,
   };
 }
@@ -543,6 +546,9 @@ function normalizeManifest(item: unknown): DocumentManifest {
     source_origin: getString(record, 'source_origin') ?? getString(metadata, 'source_origin') ?? 'uploaded',
     checksum: getString(record, 'checksum'),
     requires_ocr: getBoolean(record, 'requires_ocr') ?? getBoolean(metadata, 'requires_ocr'),
+    final_status: getString(record, 'final_status') ?? getString(metadata, 'final_status'),
+    processing_status: getString(record, 'processing_status') ?? getString(metadata, 'processing_status'),
+    ocr_status: getString(record, 'ocr_status') ?? getString(metadata, 'ocr_status'),
     warnings: toStringArray(record.warnings),
     metadata,
   };
@@ -593,6 +599,9 @@ function normalizeDiagnosticsResponse(response: unknown, documentId: string): Di
     document_id: String(record.document_id ?? documentId),
     status: getString(record, 'status'),
     manifest_status: getString(record, 'manifest_status', 'status'),
+    final_status: getString(record, 'final_status'),
+    processing_status: getString(record, 'processing_status'),
+    ocr_status: getString(record, 'ocr_status'),
     requires_ocr: getBoolean(record, 'requires_ocr'),
     last_error: getString(record, 'last_error', 'error'),
     file_exists: typeof record.file_exists === 'boolean' ? record.file_exists : undefined,
