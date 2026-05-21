@@ -430,7 +430,7 @@ function ProcessingStatus({ result }: { result: IngestResponse }) {
   );
 }
 
-function DiagnosticsBlock({
+export function DiagnosticsBlock({
   diagnostics,
   title,
   filename,
@@ -443,12 +443,7 @@ function DiagnosticsBlock({
   const hasLifecycleSuccess = isSuccessfulLifecycleStatus(effectiveStatus);
   const requiresOcr = !hasLifecycleSuccess && diagnostics.requires_ocr === true && !indicatesNativeTextOrOcrSuccess(diagnostics.ocr_status);
   const visibleWarnings = filterVisibleWarnings(diagnostics.warnings, hasLifecycleSuccess);
-  const checks = [
-    ['Status', getProcessingStatusLabel(effectiveStatus)],
-    ['Parsed', formatBoolean(diagnostics.parsed_exists ?? diagnostics.parsed_artifact_exists)],
-    ['Ready for Indexing', formatBoolean(diagnostics.chunks_exists ?? diagnostics.chunk_artifact_exists)],
-    ['Ready for AI Search', formatBoolean(diagnostics.active ?? diagnostics.indexed)],
-  ];
+  const stages = getDiagnosticsStages(diagnostics, effectiveStatus);
 
   return (
     <div className="min-h-0 overflow-y-auto px-5 py-4">
@@ -468,10 +463,16 @@ function DiagnosticsBlock({
         </div>
       ) : null}
       <div className="grid gap-2 sm:grid-cols-2">
-        {checks.map(([label, value]) => (
-          <div key={String(label)} className="min-w-0 rounded-md border border-white/10 bg-[#141b2e] p-2 text-xs">
-            <div className="mb-1 text-[11px] font-medium uppercase text-slate-500">{label}</div>
-            <div className="break-words text-slate-200">{value === undefined || value === '' ? '-' : String(value)}</div>
+        <div className="min-w-0 rounded-md border border-white/10 bg-[#141b2e] p-2 text-xs">
+          <div className="mb-1 text-[11px] font-medium uppercase text-slate-500">Status</div>
+          <div className="break-words text-slate-200">{getProcessingStatusLabel(effectiveStatus)}</div>
+        </div>
+        {stages.map((stage) => (
+          <div key={stage.label} className="min-w-0 rounded-md border border-white/10 bg-[#141b2e] p-2 text-xs">
+            <div className="mb-1 text-[11px] font-medium uppercase text-slate-500">{stage.label}</div>
+            <div className={stage.completed ? 'break-words text-cyan-100' : 'break-words text-slate-400'}>
+              {stage.completed ? 'completed' : 'pending'}
+            </div>
           </div>
         ))}
       </div>
@@ -481,18 +482,16 @@ function DiagnosticsBlock({
           <div className="break-words">{toUserFriendlyProcessingMessage(diagnostics.last_error)}</div>
         </div>
       ) : null}
-      <div className="mt-3 rounded-md border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-100">
-        <div className="mb-1 font-semibold uppercase text-amber-200">Warnings</div>
-        {visibleWarnings.length ? (
+      {visibleWarnings.length ? (
+        <div className="mt-3 rounded-md border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-100">
+          <div className="mb-1 font-semibold uppercase text-amber-200">Warnings</div>
           <ul className="space-y-1">
             {visibleWarnings.map((warning) => (
               <li key={warning} className="break-words">{toUserFriendlyProcessingMessage(warning)}</li>
             ))}
           </ul>
-        ) : (
-          <div>-</div>
-        )}
-      </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -582,12 +581,18 @@ function hasProcessingWarning(warning: string): boolean {
   return /ocr|required|fail|failed|error|could not read|text layer|extractable text/i.test(warning);
 }
 
+function isPlaceholderWarning(warning: unknown): boolean {
+  return typeof warning !== 'string' || warning.trim() === '' || warning.trim() === '-';
+}
+
 function filterVisibleWarnings(warnings: string[] | undefined, hasLifecycleSuccess: boolean): string[] {
   if (!warnings?.length) {
     return [];
   }
 
-  return hasLifecycleSuccess ? warnings.filter((warning) => !hasProcessingWarning(warning)) : warnings;
+  const userSafeWarnings = warnings.filter((warning) => !isPlaceholderWarning(warning));
+
+  return hasLifecycleSuccess ? userSafeWarnings.filter((warning) => !hasProcessingWarning(warning)) : userSafeWarnings;
 }
 
 function isSuccessfulLifecycleStatus(status: string | undefined): boolean {
@@ -628,6 +633,25 @@ function getEffectiveDiagnosticsStatus(diagnostics: DiagnosticsResponse): Mainte
   );
 }
 
+function getDiagnosticsStages(diagnostics: DiagnosticsResponse, effectiveStatus: string | undefined): Array<{ label: string; completed: boolean }> {
+  const status = effectiveStatus?.toLowerCase();
+  const readyForSearch = status ? /^(indexed|ready|active|completed|success)$/i.test(status) : false;
+  const preparedForIndex = readyForSearch || status === 'chunked' || diagnostics.chunks_exists === true || diagnostics.chunk_artifact_exists === true;
+  const readDocument = preparedForIndex
+    || status === 'parsed'
+    || status === 'ocr_completed'
+    || diagnostics.parsed_exists === true
+    || diagnostics.parsed_artifact_exists === true;
+  const builtSearchIndex = readyForSearch || diagnostics.indexed === true || diagnostics.active === true;
+
+  return [
+    { label: 'Read document', completed: readDocument },
+    { label: 'Prepare knowledge', completed: preparedForIndex },
+    { label: 'Build search index', completed: builtSearchIndex },
+    { label: 'Ready to ask', completed: readyForSearch || diagnostics.active === true },
+  ];
+}
+
 function shouldShowOcrRequired(document: DocumentManifest, diagnostics: DiagnosticsResponse | null): boolean {
   const ocrStatus = diagnostics?.ocr_status ?? document.ocr_status;
   const hasTextSuccess = indicatesNativeTextOrOcrSuccess(ocrStatus)
@@ -661,10 +685,6 @@ function StatusMessage({ message, tone }: { message?: string | null; tone: 'erro
       <span>{message}</span>
     </div>
   );
-}
-
-function formatBoolean(value: boolean | undefined): string | undefined {
-  return value === undefined ? undefined : value ? 'yes' : 'no';
 }
 
 function getDocumentTypeLabel(documentType: string): string {

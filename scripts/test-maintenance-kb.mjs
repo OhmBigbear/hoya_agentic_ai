@@ -288,7 +288,7 @@ try {
   const { MaintenanceKnowledgeBasePage } = await server.ssrLoadModule('/src/pages/maintenance/MaintenanceKnowledgeBasePage.tsx');
   const { FilterPanel } = await server.ssrLoadModule('/src/components/maintenance/FilterPanel.tsx');
   const { DocumentResultList } = await server.ssrLoadModule('/src/components/maintenance/DocumentResultList.tsx');
-  const { DocumentManagementPanel } = await server.ssrLoadModule('/src/components/maintenance/DocumentManagementPanel.tsx');
+  const { DocumentManagementPanel, DiagnosticsBlock } = await server.ssrLoadModule('/src/components/maintenance/DocumentManagementPanel.tsx');
   const { AssistantPanel } = await server.ssrLoadModule('/src/components/maintenance/AssistantPanel.tsx');
   const {
     getMaintenanceKbContext,
@@ -831,6 +831,29 @@ try {
   assert.doesNotMatch(normalizedSuccessManagementHtml, /OCR Required/);
   assert.doesNotMatch(normalizedSuccessManagementHtml, /Processing Failed/);
   assert.doesNotMatch(normalizedSuccessManagementHtml, /We could not read the document text\./);
+
+  const indexedDiagnosticsHtml = renderToStaticMarkup(React.createElement(DiagnosticsBlock, {
+    title: 'Uploaded Bearing Procedure',
+    filename: 'bearing-procedure.pdf',
+    diagnostics: {
+      ...diagnosticsResponse,
+      final_status: 'indexed',
+      processing_status: 'indexed',
+      parsed_exists: true,
+      chunks_exists: false,
+      indexed: false,
+      active: false,
+      warnings: ['-', '', null],
+    },
+  }));
+  assert.match(indexedDiagnosticsHtml, /Ready for AI Search/);
+  assert.match(indexedDiagnosticsHtml, /Read document[\s\S]*?completed/);
+  assert.match(indexedDiagnosticsHtml, /Prepare knowledge[\s\S]*?completed/);
+  assert.match(indexedDiagnosticsHtml, /Build search index[\s\S]*?completed/);
+  assert.match(indexedDiagnosticsHtml, /Ready to ask[\s\S]*?completed/);
+  assert.doesNotMatch(indexedDiagnosticsHtml, /Warnings/);
+  assert.doesNotMatch(indexedDiagnosticsHtml, /Ready for AI Search[\s\S]{0,160}>no</);
+  assert.doesNotMatch(indexedDiagnosticsHtml, /Ready for Indexing[\s\S]{0,160}>no</);
 
   const processErrorManagementHtml = renderToStaticMarkup(React.createElement(DocumentManagementPanel, {
     documents: [manifests[0]],
