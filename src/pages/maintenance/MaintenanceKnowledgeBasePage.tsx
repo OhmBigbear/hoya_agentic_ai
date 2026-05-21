@@ -4,6 +4,7 @@ import { AssistantPanel } from '../../components/maintenance/AssistantPanel';
 import { DocumentManagementPanel } from '../../components/maintenance/DocumentManagementPanel';
 import { DocumentResultList } from '../../components/maintenance/DocumentResultList';
 import { FilterPanel } from '../../components/maintenance/FilterPanel';
+import { normalizeDocumentLifecycle } from '../../components/maintenance/documentLifecycle';
 import {
   askMaintenanceKbAssistant,
   getDocumentDiagnostics,
@@ -381,16 +382,7 @@ export function MaintenanceKnowledgeBasePage({
 }
 
 function shouldTreatDiagnosticsAsOcrRequired(diagnostics: DiagnosticsResponse | null): boolean {
-  if (!diagnostics?.requires_ocr) {
-    return false;
-  }
-
-  const statuses = [diagnostics.final_status, diagnostics.processing_status, diagnostics.status, diagnostics.manifest_status];
-  if (statuses.some((status) => status && /^(parsed|chunked|indexed|ready|active|ocr_completed|completed|success)$/i.test(status))) {
-    return false;
-  }
-
-  return !diagnostics.ocr_status || !/^(native_text|native_text_success|skipped|ocr_skipped|completed|ocr_completed|success)$/i.test(diagnostics.ocr_status);
+  return normalizeDocumentLifecycle(diagnostics).requiresOcr;
 }
 
 function withRetrievalGrounding(

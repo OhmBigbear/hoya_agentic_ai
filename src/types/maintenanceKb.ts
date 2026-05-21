@@ -99,6 +99,9 @@ export interface MaintenanceKbSearchResult {
   requires_ocr?: boolean;
   final_status?: MaintenanceKbDocumentStatus;
   processing_status?: MaintenanceKbDocumentStatus;
+  retrieval_status?: MaintenanceKbDocumentStatus;
+  chunk_status?: MaintenanceKbDocumentStatus;
+  embedding_status?: MaintenanceKbDocumentStatus;
   ocr_status?: MaintenanceKbDocumentStatus;
   metadata?: MaintenanceKbMetadata;
 }
@@ -207,6 +210,9 @@ export interface DocumentManifest {
   requires_ocr?: boolean;
   final_status?: MaintenanceKbDocumentStatus;
   processing_status?: MaintenanceKbDocumentStatus;
+  retrieval_status?: MaintenanceKbDocumentStatus;
+  chunk_status?: MaintenanceKbDocumentStatus;
+  embedding_status?: MaintenanceKbDocumentStatus;
   ocr_status?: MaintenanceKbDocumentStatus;
   warnings?: string[];
   metadata?: MaintenanceKbMetadata;
@@ -242,6 +248,9 @@ export interface DiagnosticsResponse {
   manifest_status?: MaintenanceKbDocumentStatus;
   final_status?: MaintenanceKbDocumentStatus;
   processing_status?: MaintenanceKbDocumentStatus;
+  retrieval_status?: MaintenanceKbDocumentStatus;
+  chunk_status?: MaintenanceKbDocumentStatus;
+  embedding_status?: MaintenanceKbDocumentStatus;
   ocr_status?: MaintenanceKbDocumentStatus;
   requires_ocr?: boolean;
   last_error?: string;

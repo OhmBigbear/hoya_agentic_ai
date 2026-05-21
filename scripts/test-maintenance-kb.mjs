@@ -799,16 +799,24 @@ try {
     documents: [{
       ...ocrManifest,
       final_status: 'indexed',
-      processing_status: 'chunked',
+      processing_status: 'failed',
+      retrieval_status: 'indexed',
+      chunk_status: 'chunked',
+      embedding_status: 'indexed',
       ocr_status: 'skipped',
+      warnings: ['OCR required: scanned PDF has no reliable text layer.', 'retry required after OCR'],
     }],
     diagnostics: {
       ...ocrDiagnosticsResponse,
       final_status: 'indexed',
-      processing_status: 'chunked',
+      processing_status: 'failed',
+      retrieval_status: 'indexed',
+      chunk_status: 'chunked',
+      embedding_status: 'indexed',
       ocr_status: 'skipped',
       indexed: true,
       active: true,
+      warnings: ['OCR required: scanned PDF has no reliable text layer.', 'retry required after OCR'],
     },
     ingestResult: null,
     uploadResult: null,
@@ -831,6 +839,7 @@ try {
   assert.doesNotMatch(normalizedSuccessManagementHtml, /OCR Required/);
   assert.doesNotMatch(normalizedSuccessManagementHtml, /Processing Failed/);
   assert.doesNotMatch(normalizedSuccessManagementHtml, /We could not read the document text\./);
+  assert.doesNotMatch(normalizedSuccessManagementHtml, /retry required/);
 
   const indexedDiagnosticsHtml = renderToStaticMarkup(React.createElement(DiagnosticsBlock, {
     title: 'Uploaded Bearing Procedure',
@@ -838,12 +847,15 @@ try {
     diagnostics: {
       ...diagnosticsResponse,
       final_status: 'indexed',
-      processing_status: 'indexed',
+      processing_status: 'failed',
+      retrieval_status: 'indexed',
+      chunk_status: 'chunked',
+      embedding_status: 'indexed',
       parsed_exists: true,
       chunks_exists: false,
       indexed: false,
       active: false,
-      warnings: ['-', '', null],
+      warnings: ['-', '', null, 'OCR required: scanned PDF has no reliable text layer.', 'transient processing warning'],
     },
   }));
   assert.match(indexedDiagnosticsHtml, /Ready for AI Search/);
@@ -852,6 +864,8 @@ try {
   assert.match(indexedDiagnosticsHtml, /Build search index[\s\S]*?completed/);
   assert.match(indexedDiagnosticsHtml, /Ready to ask[\s\S]*?completed/);
   assert.doesNotMatch(indexedDiagnosticsHtml, /Warnings/);
+  assert.doesNotMatch(indexedDiagnosticsHtml, /Processing Failed/);
+  assert.doesNotMatch(indexedDiagnosticsHtml, /OCR Required/);
   assert.doesNotMatch(indexedDiagnosticsHtml, /Ready for AI Search[\s\S]{0,160}>no</);
   assert.doesNotMatch(indexedDiagnosticsHtml, /Ready for Indexing[\s\S]{0,160}>no</);
 
@@ -927,12 +941,23 @@ try {
   assert.match(ocrSearchHtml, /OCR Required/);
 
   const normalizedSuccessSearchHtml = renderToStaticMarkup(React.createElement(DocumentResultList, {
-    documents: [{ ...searchResponse.items[0], requires_ocr: true, final_status: 'indexed', processing_status: 'indexed', ocr_status: 'completed' }],
+    documents: [{
+      ...searchResponse.items[0],
+      requires_ocr: true,
+      final_status: 'indexed',
+      processing_status: 'failed',
+      retrieval_status: 'indexed',
+      chunk_status: 'chunked',
+      embedding_status: 'indexed',
+      ocr_status: 'completed',
+    }],
     isLoading: false,
     error: null,
     selectedDocumentRequiresOcr: false,
   }));
+  assert.match(normalizedSuccessSearchHtml, /Ready for AI Search/);
   assert.doesNotMatch(normalizedSuccessSearchHtml, /OCR Required/);
+  assert.doesNotMatch(normalizedSuccessSearchHtml, /Processing Failed/);
   assert.doesNotMatch(normalizedSuccessSearchHtml, /Selected document is not searchable yet because OCR is required/);
 
   const unavailable = await fetch('http://agentic-core.test/api/maintenance/kb/unavailable');

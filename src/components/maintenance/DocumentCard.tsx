@@ -2,6 +2,7 @@ import { FileText } from 'lucide-react';
 import { Badge } from '../../app/components/ui/badge';
 import { Card, CardContent } from '../../app/components/ui/card';
 import type { MaintenanceKbSearchResult } from '../../types/maintenanceKb';
+import { normalizeDocumentLifecycle, ocrRequiredMessage } from './documentLifecycle';
 
 interface DocumentCardProps {
   document: MaintenanceKbSearchResult;
@@ -17,10 +18,9 @@ const documentTypeLabels: Record<MaintenanceKbSearchResult['document_type'], str
   knowledge: 'Knowledge Document',
   other: 'Other Document',
 };
-const ocrRequiredMessage = 'No reliable text layer found. OCR is required before this document can be indexed.';
-
 export function DocumentCard({ document }: DocumentCardProps) {
-  const requiresOcr = shouldShowOcrRequired(document);
+  const lifecycle = normalizeDocumentLifecycle(document);
+  const requiresOcr = lifecycle.requiresOcr;
 
   return (
     <Card className="border-white/10 bg-[#141b2e] transition-colors hover:border-cyan-500/40">
@@ -37,6 +37,11 @@ export function DocumentCard({ document }: DocumentCardProps) {
                   {documentTypeLabels[document.document_type]}
                 </Badge>
                 <OriginBadge origin={document.source_origin} />
+                {lifecycle.effectiveStatus ? (
+                  <Badge className="border-white/10 bg-white/5 text-slate-300">
+                    {lifecycle.statusLabel}
+                  </Badge>
+                ) : null}
                 {requiresOcr ? (
                   <Badge className="border-amber-500/30 bg-amber-500/15 text-amber-100">OCR Required</Badge>
                 ) : null}
@@ -58,40 +63,6 @@ export function DocumentCard({ document }: DocumentCardProps) {
       </CardContent>
     </Card>
   );
-}
-
-function shouldShowOcrRequired(document: MaintenanceKbSearchResult): boolean {
-  const metadata = document.metadata ?? {};
-  const finalStatus = document.final_status ?? getMetadataString(metadata, 'final_status');
-  const processingStatus = document.processing_status ?? getMetadataString(metadata, 'processing_status');
-  const ocrStatus = document.ocr_status ?? getMetadataString(metadata, 'ocr_status');
-
-  if (
-    isSuccessfulFinalStatus(finalStatus)
-    || isSuccessfulLifecycleStatus(processingStatus)
-    || indicatesNativeTextOrOcrSuccess(ocrStatus)
-  ) {
-    return false;
-  }
-
-  return document.requires_ocr === true;
-}
-
-function getMetadataString(metadata: Record<string, unknown>, key: string): string | undefined {
-  const value = metadata[key];
-  return typeof value === 'string' ? value : undefined;
-}
-
-function isSuccessfulLifecycleStatus(status: string | undefined): boolean {
-  return status ? /^(parsed|chunked|indexed|ready|active|ocr_completed|completed|success)$/i.test(status) : false;
-}
-
-function isSuccessfulFinalStatus(status: string | undefined): boolean {
-  return status ? /^(parsed|chunked|indexed|ready|active|completed|success)$/i.test(status) : false;
-}
-
-function indicatesNativeTextOrOcrSuccess(status: string | undefined): boolean {
-  return status ? /^(native_text|native_text_success|skipped|ocr_skipped|completed|ocr_completed|success)$/i.test(status) : false;
 }
 
 function OriginBadge({ origin }: { origin?: string }) {
