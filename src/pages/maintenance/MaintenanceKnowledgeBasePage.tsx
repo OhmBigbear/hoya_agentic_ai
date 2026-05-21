@@ -6,7 +6,9 @@ import { DocumentResultList } from '../../components/maintenance/DocumentResultL
 import { FilterPanel } from '../../components/maintenance/FilterPanel';
 import { normalizeDocumentLifecycle } from '../../components/maintenance/documentLifecycle';
 import {
+  archiveDocument,
   askMaintenanceKbAssistant,
+  deleteDocument,
   getDocumentDiagnostics,
   getMaintenanceKbContext,
   listDocuments,
@@ -76,9 +78,11 @@ export function MaintenanceKnowledgeBasePage({
   const [uploadNotice, setUploadNotice] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
   const [ingestError, setIngestError] = useState<string | null>(null);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
+  const [lifecycleActionError, setLifecycleActionError] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [traceId, setTraceId] = useState<string | undefined>();
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
+  const [contentRevision, setContentRevision] = useState(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -181,7 +185,7 @@ export function MaintenanceKnowledgeBasePage({
     return () => {
       isMounted = false;
     };
-  }, [context, groundedFilters]);
+  }, [context, groundedFilters, contentRevision]);
 
   useEffect(() => {
     if (!uploadNotice) {
@@ -283,6 +287,33 @@ export function MaintenanceKnowledgeBasePage({
     }
   };
 
+  const handleArchiveDocument = async (documentId: string) => {
+    await handleDocumentLifecycleAction(documentId, 'archive');
+  };
+
+  const handleDeleteDocument = async (documentId: string) => {
+    await handleDocumentLifecycleAction(documentId, 'delete');
+  };
+
+  const handleDocumentLifecycleAction = async (documentId: string, action: 'archive' | 'delete') => {
+    setLifecycleActionError(null);
+    try {
+      const message = await runDocumentLifecycleAction({
+        documentId,
+        action,
+        archive: archiveDocument,
+        remove: deleteDocument,
+        clearDocumentStateAfterHide,
+        refreshDocuments,
+        refreshSearchContext: () => setContentRevision((current) => current + 1),
+      });
+      setUploadNotice({ tone: 'success', message });
+    } catch (error) {
+      setLifecycleActionError(error instanceof Error ? error.message : `Unable to ${action} maintenance document.`);
+      throw error;
+    }
+  };
+
   const handleFiltersChange = (nextFilters: MaintenanceKbSearchRequest) => {
     const changedContext = hasRetrievalContextChanged(filters, nextFilters);
     setFilters(nextFilters);
@@ -295,6 +326,27 @@ export function MaintenanceKnowledgeBasePage({
     setSelectedDocumentIds([]);
     setDiagnostics(null);
     setDiagnosticsError(null);
+  };
+
+  const clearDocumentStateAfterHide = (documentId: string) => {
+    if (shouldClearDocumentFocusForLifecycleAction(documentId, selectedDocumentIds)) {
+      clearSelectedDocuments();
+      setAssistantResponse(null);
+    }
+
+    if (diagnostics?.document_id === documentId) {
+      setDiagnostics(null);
+      setDiagnosticsError(null);
+    }
+
+    if (ingestResult?.document_id === documentId) {
+      setIngestResult(null);
+      setIngestError(null);
+    }
+
+    if (uploadResult?.document_id === documentId) {
+      setUploadResult(null);
+    }
   };
 
   return (
@@ -343,9 +395,12 @@ export function MaintenanceKnowledgeBasePage({
                 documentError={documentError}
                 ingestError={ingestError}
                 diagnosticsError={diagnosticsError}
+                lifecycleActionError={lifecycleActionError}
                 onUpload={handleUpload}
                 onIngest={handleIngest}
                 onDiagnostics={handleDiagnostics}
+                onArchive={handleArchiveDocument}
+                onDelete={handleDeleteDocument}
                 onRefresh={refreshDocuments}
                 searchFilters={filters}
                 onSearchFiltersChange={handleFiltersChange}
@@ -379,6 +434,41 @@ export function MaintenanceKnowledgeBasePage({
       </div>
     </main>
   );
+}
+
+export async function runDocumentLifecycleAction({
+  documentId,
+  action,
+  archive,
+  remove,
+  clearDocumentStateAfterHide,
+  refreshDocuments,
+  refreshSearchContext,
+}: {
+  documentId: string;
+  action: 'archive' | 'delete';
+  archive: (documentId: string) => Promise<void>;
+  remove: (documentId: string) => Promise<void>;
+  clearDocumentStateAfterHide: (documentId: string) => void;
+  refreshDocuments: () => Promise<void>;
+  refreshSearchContext: () => void;
+}): Promise<string> {
+  if (action === 'archive') {
+    await archive(documentId);
+  } else {
+    await remove(documentId);
+  }
+
+  clearDocumentStateAfterHide(documentId);
+  await refreshDocuments();
+  refreshSearchContext();
+  return action === 'archive'
+    ? 'Document archived. It is hidden from AI search and the default document list.'
+    : 'Document deleted.';
+}
+
+export function shouldClearDocumentFocusForLifecycleAction(documentId: string, selectedDocumentIds: string[]): boolean {
+  return selectedDocumentIds.includes(documentId);
 }
 
 function shouldTreatDiagnosticsAsOcrRequired(diagnostics: DiagnosticsResponse | null): boolean {

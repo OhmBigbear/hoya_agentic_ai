@@ -244,6 +244,10 @@ async function requestJson<T>(path: string, init?: RequestInit, params?: QueryPa
       throw new Error(formatHttpError(response.status, response.statusText, body));
     }
 
+    if (response.status === 204) {
+      return undefined as T;
+    }
+
     return response.json() as Promise<T>;
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
@@ -812,6 +816,18 @@ export async function getDocument(documentId: string): Promise<DocumentManifest>
     method: 'GET',
   });
   return normalizeManifest(response);
+}
+
+export async function archiveDocument(documentId: string): Promise<void> {
+  await requestJson<unknown>(`${MAINTENANCE_KB_ENDPOINTS.documents}/${encodeURIComponent(documentId)}/archive`, {
+    method: 'POST',
+  });
+}
+
+export async function deleteDocument(documentId: string): Promise<void> {
+  await requestJson<unknown>(`${MAINTENANCE_KB_ENDPOINTS.documents}/${encodeURIComponent(documentId)}`, {
+    method: 'DELETE',
+  });
 }
 
 export async function ingestDocument(documentId: string): Promise<IngestResponse> {

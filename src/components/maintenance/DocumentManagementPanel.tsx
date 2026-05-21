@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, FileUp, Loader2, RefreshCcw, Search, Stethoscope, UploadCloud } from 'lucide-react';
+import { AlertTriangle, Archive, CheckCircle2, FileUp, Loader2, RefreshCcw, Search, Stethoscope, Trash2, UploadCloud } from 'lucide-react';
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import { Badge } from '../../app/components/ui/badge';
 import { Button } from '../../app/components/ui/button';
@@ -74,9 +74,12 @@ interface DocumentManagementPanelProps {
   documentError?: string | null;
   ingestError?: string | null;
   diagnosticsError?: string | null;
+  lifecycleActionError?: string | null;
   onUpload: (file: File, metadata: MaintenanceKbDocumentMetadata) => Promise<void>;
   onIngest: (documentId: string) => Promise<void>;
   onDiagnostics: (documentId: string) => Promise<void>;
+  onArchive?: (documentId: string) => Promise<void>;
+  onDelete?: (documentId: string) => Promise<void>;
   onRefresh: () => Promise<void>;
   onSearchFiltersChange: (filters: MaintenanceKbSearchRequest) => void;
   searchFilters: MaintenanceKbSearchRequest;
@@ -96,9 +99,12 @@ export function DocumentManagementPanel({
   documentError,
   ingestError,
   diagnosticsError,
+  lifecycleActionError,
   onUpload,
   onIngest,
   onDiagnostics,
+  onArchive = async () => {},
+  onDelete = async () => {},
   onRefresh,
   onSearchFiltersChange,
   searchFilters,
@@ -109,6 +115,8 @@ export function DocumentManagementPanel({
   const [metadata, setMetadata] = useState<MaintenanceKbDocumentMetadata>(defaultMetadata);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(Boolean(diagnostics));
+  const [pendingLifecycleAction, setPendingLifecycleAction] = useState<DocumentLifecycleAction | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
 
   const selectedDocument = useMemo(() => {
     const id = diagnostics?.document_id ?? ingestResult?.document_id ?? uploadResult?.document_id;
@@ -117,6 +125,10 @@ export function DocumentManagementPanel({
 
   const selectedDocumentTitle = selectedDocument?.title ?? diagnostics?.manifest?.title ?? diagnostics?.document_id;
   const selectedDocumentFilename = selectedDocument?.filename ?? diagnostics?.manifest?.filename;
+  const isConfirmingDelete = pendingLifecycleAction?.action === 'delete';
+  const isLifecycleActionConfirmed = pendingLifecycleAction
+    ? pendingLifecycleAction.action === 'archive' || isDeleteConfirmationValid(deleteConfirmation)
+    : false;
 
   useEffect(() => {
     if (diagnostics) {
@@ -169,6 +181,34 @@ export function DocumentManagementPanel({
 
     setValidationError(null);
     await onUpload(file, applyContextDefaults(metadata, searchFilters));
+  };
+
+  const requestLifecycleAction = (action: DocumentLifecycleActionType, document: DocumentManifest) => {
+    setDeleteConfirmation('');
+    setPendingLifecycleAction({ action, document });
+  };
+
+  const closeLifecycleActionDialog = (isOpen: boolean) => {
+    if (!isOpen) {
+      setPendingLifecycleAction(null);
+      setDeleteConfirmation('');
+    }
+  };
+
+  const confirmLifecycleAction = async () => {
+    if (!pendingLifecycleAction || !isLifecycleActionConfirmed) {
+      return;
+    }
+
+    const { action, document } = pendingLifecycleAction;
+    if (action === 'archive') {
+      await onArchive(document.document_id);
+    } else {
+      await onDelete(document.document_id);
+    }
+
+    setPendingLifecycleAction(null);
+    setDeleteConfirmation('');
   };
 
   return (
@@ -263,7 +303,7 @@ export function DocumentManagementPanel({
           </div>
 
           {isIngesting ? <StatusMessage message={documentProcessingMessage} tone="info" /> : null}
-          <StatusMessage message={documentError ?? ingestError ?? diagnosticsError} tone="error" />
+          <StatusMessage message={documentError ?? lifecycleActionError ?? ingestError ?? diagnosticsError} tone="error" />
           <div className="min-h-0">
             {documents.length === 0 && !isLoadingDocuments && !documentError ? (
               <div className="rounded-md border border-dashed border-white/10 bg-[#101827] p-4 text-sm text-slate-400">No uploaded documents are available yet.</div>
@@ -279,6 +319,8 @@ export function DocumentManagementPanel({
                     isLoadingDiagnostics={isLoadingDiagnostics}
                     onIngest={onIngest}
                     onDiagnostics={onDiagnostics}
+                    onArchive={(targetDocument) => requestLifecycleAction('archive', targetDocument)}
+                    onDelete={(targetDocument) => requestLifecycleAction('delete', targetDocument)}
                   />
                 ))}
               </div>
@@ -301,7 +343,19 @@ export function DocumentManagementPanel({
           {diagnostics ? (
             <DiagnosticsBlock diagnostics={diagnostics} title={selectedDocumentTitle} filename={selectedDocumentFilename} />
           ) : null}
-          <DialogFooter className="border-t border-white/10 px-5 py-4">
+          <DialogFooter className="flex flex-col gap-2 border-t border-white/10 px-5 py-4 sm:flex-row sm:justify-between">
+            {selectedDocument ? (
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" onClick={() => requestLifecycleAction('archive', selectedDocument)} className="border-amber-500/30 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20">
+                  <Archive className="mr-2 h-4 w-4" />
+                  Archive
+                </Button>
+                <Button type="button" variant="outline" onClick={() => requestLifecycleAction('delete', selectedDocument)} className="border-red-500/40 bg-red-500/10 text-red-100 hover:bg-red-500/20">
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete
+                </Button>
+              </div>
+            ) : <span />}
             <DialogClose asChild>
               <Button type="button" variant="outline" className="border-white/10 bg-white/5 text-slate-200 hover:bg-white/10">
                 Close
@@ -310,8 +364,68 @@ export function DocumentManagementPanel({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={Boolean(pendingLifecycleAction)} onOpenChange={closeLifecycleActionDialog}>
+        <DialogContent className="border-white/10 bg-[#101827] text-slate-200 shadow-2xl shadow-black/40 sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="text-white">{isConfirmingDelete ? 'Delete document?' : 'Archive document?'}</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              {pendingLifecycleAction?.document.title ?? 'Selected document'}
+            </DialogDescription>
+          </DialogHeader>
+          {pendingLifecycleAction ? (
+            <div className="space-y-3 text-sm text-slate-300">
+              {pendingLifecycleAction.action === 'archive' ? (
+                <p>
+                  Archive is the recommended cleanup action. This document will be hidden from AI search and the default document list. Artifacts and history are preserved.
+                </p>
+              ) : (
+                <>
+                  <p>This will remove the document and processing artifacts. This action is not reversible.</p>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium uppercase text-slate-400">Type DELETE to confirm</label>
+                    <Input
+                      value={deleteConfirmation}
+                      onChange={(event) => setDeleteConfirmation(event.target.value)}
+                      placeholder="DELETE"
+                      className="border-red-500/30 bg-[#1e293b] text-white placeholder:text-slate-500"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+          ) : null}
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline" className="border-white/10 bg-white/5 text-slate-200 hover:bg-white/10">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button
+              type="button"
+              onClick={() => void confirmLifecycleAction()}
+              disabled={!isLifecycleActionConfirmed}
+              className={isConfirmingDelete ? 'bg-red-600 text-white hover:bg-red-500 disabled:opacity-50' : 'bg-amber-500/20 text-amber-100 hover:bg-amber-500/30'}
+            >
+              {isConfirmingDelete ? <Trash2 className="mr-2 h-4 w-4" /> : <Archive className="mr-2 h-4 w-4" />}
+              {isConfirmingDelete ? 'Delete Document' : 'Archive Document'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
+}
+
+type DocumentLifecycleActionType = 'archive' | 'delete';
+
+type DocumentLifecycleAction = {
+  action: DocumentLifecycleActionType;
+  document: DocumentManifest;
+};
+
+export function isDeleteConfirmationValid(value: string): boolean {
+  return value.trim() === 'DELETE';
 }
 
 function contextValue(value: string | undefined): string | undefined {
@@ -340,6 +454,8 @@ function DocumentRow({
   isLoadingDiagnostics,
   onIngest,
   onDiagnostics,
+  onArchive,
+  onDelete,
 }: {
   document: DocumentManifest;
   isSelected: boolean;
@@ -348,6 +464,8 @@ function DocumentRow({
   isLoadingDiagnostics: boolean;
   onIngest: (documentId: string) => Promise<void>;
   onDiagnostics: (documentId: string) => Promise<void>;
+  onArchive: (document: DocumentManifest) => void;
+  onDelete: (document: DocumentManifest) => void;
 }) {
   const lifecycle = normalizeDocumentLifecycle(document, diagnostics);
   const requiresOcr = lifecycle.requiresOcr;
@@ -382,7 +500,7 @@ function DocumentRow({
             </div>
           ) : null}
         </div>
-        <div className="flex shrink-0 gap-2">
+        <div className="flex shrink-0 flex-wrap justify-end gap-2">
           <Button type="button" size="sm" onClick={() => void onIngest(document.document_id)} disabled={isIngesting || requiresOcr} title={requiresOcr ? 'OCR is required before processing can run.' : undefined} className="bg-cyan-500/20 text-cyan-100 hover:bg-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-50">
             {isIngesting ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="mr-2 h-3.5 w-3.5" />}
             Process Document
@@ -390,6 +508,14 @@ function DocumentRow({
           <Button type="button" size="sm" variant="outline" onClick={() => void onDiagnostics(document.document_id)} disabled={isLoadingDiagnostics} className="border-white/10 bg-white/5 text-slate-200 hover:bg-white/10">
             {isLoadingDiagnostics ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Stethoscope className="mr-2 h-3.5 w-3.5" />}
             Details
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => onArchive(document)} className="border-amber-500/30 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20">
+            <Archive className="mr-2 h-3.5 w-3.5" />
+            Archive
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => onDelete(document)} className="border-red-500/40 bg-red-500/10 text-red-100 hover:bg-red-500/20">
+            <Trash2 className="mr-2 h-3.5 w-3.5" />
+            Delete
           </Button>
         </div>
       </div>

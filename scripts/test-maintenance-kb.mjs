@@ -127,6 +127,16 @@ globalThis.fetch = async (url, init = {}) => {
     });
   }
 
+  if (String(url).endsWith('/api/maintenance/kb/documents/doc-upload-1/archive')) {
+    assert.equal(init.method, 'POST');
+    return new Response(null, { status: 204 });
+  }
+
+  if (String(url).endsWith('/api/maintenance/kb/documents/doc-upload-1')) {
+    assert.equal(init.method, 'DELETE');
+    return new Response(null, { status: 204 });
+  }
+
   if (String(url).includes('/api/maintenance/kb/documents')) {
     assert.equal(init.method, 'GET');
     return jsonResponse({
@@ -285,10 +295,14 @@ const server = await createServer({
 });
 
 try {
-  const { MaintenanceKnowledgeBasePage } = await server.ssrLoadModule('/src/pages/maintenance/MaintenanceKnowledgeBasePage.tsx');
+  const {
+    MaintenanceKnowledgeBasePage,
+    runDocumentLifecycleAction,
+    shouldClearDocumentFocusForLifecycleAction,
+  } = await server.ssrLoadModule('/src/pages/maintenance/MaintenanceKnowledgeBasePage.tsx');
   const { FilterPanel } = await server.ssrLoadModule('/src/components/maintenance/FilterPanel.tsx');
   const { DocumentResultList } = await server.ssrLoadModule('/src/components/maintenance/DocumentResultList.tsx');
-  const { DocumentManagementPanel, DiagnosticsBlock } = await server.ssrLoadModule('/src/components/maintenance/DocumentManagementPanel.tsx');
+  const { DocumentManagementPanel, DiagnosticsBlock, isDeleteConfirmationValid } = await server.ssrLoadModule('/src/components/maintenance/DocumentManagementPanel.tsx');
   const { AssistantPanel } = await server.ssrLoadModule('/src/components/maintenance/AssistantPanel.tsx');
   const {
     getMaintenanceKbContext,
@@ -296,6 +310,8 @@ try {
     listDocuments,
     processDocument,
     getDocumentDiagnostics,
+    archiveDocument,
+    deleteDocument,
     searchMaintenanceKbDocuments,
     askMaintenanceKbAssistant,
     toMaintenanceKbSearchApiRequest,
@@ -333,6 +349,8 @@ try {
   const manifests = await listDocuments(filters);
   const processResponse = await processDocument('doc-upload-1');
   const diagnosticsResponse = await getDocumentDiagnostics('doc-upload-1');
+  await archiveDocument('doc-upload-1');
+  await deleteDocument('doc-upload-1');
 
   assert.equal(fetchCalls[0].url, 'http://agentic-core.test/api/maintenance/kb/context');
   assert.equal(fetchCalls[1].url, 'http://agentic-core.test/api/maintenance/kb/search');
@@ -341,7 +359,34 @@ try {
   assert.match(fetchCalls[4].url, /\/api\/maintenance\/kb\/documents\?line=rx1-surfacing/);
   assert.equal(fetchCalls[5].url, 'http://agentic-core.test/api/maintenance/kb/documents/doc-upload-1/process');
   assert.equal(fetchCalls[6].url, 'http://agentic-core.test/api/maintenance/kb/documents/doc-upload-1/diagnostics');
+  assert.equal(fetchCalls[7].url, 'http://agentic-core.test/api/maintenance/kb/documents/doc-upload-1/archive');
+  assert.equal(fetchCalls[7].init.method, 'POST');
+  assert.equal(fetchCalls[8].url, 'http://agentic-core.test/api/maintenance/kb/documents/doc-upload-1');
+  assert.equal(fetchCalls[8].init.method, 'DELETE');
   assert.equal(DOCUMENT_PROCESS_TIMEOUT_MS, 240000);
+  assert.equal(isDeleteConfirmationValid('DELETE'), true);
+  assert.equal(isDeleteConfirmationValid('delete'), false);
+  assert.equal(isDeleteConfirmationValid(''), false);
+  assert.equal(shouldClearDocumentFocusForLifecycleAction('doc-upload-1', ['doc-upload-1']), true);
+  assert.equal(shouldClearDocumentFocusForLifecycleAction('doc-upload-1', ['doc-other-1']), false);
+
+  const lifecycleEvents = [];
+  const lifecycleMessage = await runDocumentLifecycleAction({
+    documentId: 'doc-upload-1',
+    action: 'archive',
+    archive: async (documentId) => lifecycleEvents.push(`archive:${documentId}`),
+    remove: async (documentId) => lifecycleEvents.push(`delete:${documentId}`),
+    clearDocumentStateAfterHide: (documentId) => lifecycleEvents.push(`clear:${documentId}`),
+    refreshDocuments: async () => lifecycleEvents.push('refresh-documents'),
+    refreshSearchContext: () => lifecycleEvents.push('refresh-search'),
+  });
+  assert.equal(lifecycleMessage, 'Document archived. It is hidden from AI search and the default document list.');
+  assert.deepEqual(lifecycleEvents, [
+    'archive:doc-upload-1',
+    'clear:doc-upload-1',
+    'refresh-documents',
+    'refresh-search',
+  ]);
 
   const uploadFormData = fetchCalls[3].init.body;
   const uploadMetadata = JSON.parse(uploadFormData.get('metadata'));
@@ -763,6 +808,8 @@ try {
   assert.match(managementHtml, /Parsed/);
   assert.match(managementHtml, /Process Document/);
   assert.match(managementHtml, /Details/);
+  assert.match(managementHtml, /Archive/);
+  assert.match(managementHtml, /Delete/);
   assert.match(managementHtml, /Ready for AI Search/);
   assert.doesNotMatch(managementHtml, /trace-diagnostics-1/);
   assert.doesNotMatch(managementHtml, /indexing_metadata/);
