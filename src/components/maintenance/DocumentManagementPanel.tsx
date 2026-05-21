@@ -94,6 +94,8 @@ interface DocumentManagementPanelProps {
   onRefresh: () => Promise<void>;
   onSearchFiltersChange: (filters: MaintenanceKbSearchRequest) => void;
   searchFilters: MaintenanceKbSearchRequest;
+  selectedDocumentIds?: string[];
+  onClearSelectedDocuments?: () => void;
 }
 
 export function DocumentManagementPanel({
@@ -114,6 +116,8 @@ export function DocumentManagementPanel({
   onRefresh,
   onSearchFiltersChange,
   searchFilters,
+  selectedDocumentIds = [],
+  onClearSelectedDocuments,
 }: DocumentManagementPanelProps) {
   const [file, setFile] = useState<File | null>(null);
   const [metadata, setMetadata] = useState<MaintenanceKbDocumentMetadata>(defaultMetadata);
@@ -238,6 +242,16 @@ export function DocumentManagementPanel({
               Refresh
             </Button>
           </div>
+          {selectedDocumentIds.length ? (
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-cyan-500/20 bg-cyan-500/10 p-2 text-xs text-cyan-100">
+              <span>AI is focusing on {formatFocusedDocuments(documents, selectedDocumentIds)}.</span>
+              {onClearSelectedDocuments ? (
+                <Button type="button" size="sm" variant="outline" onClick={onClearSelectedDocuments} className="h-7 border-white/10 bg-white/5 px-2 text-xs text-slate-200 hover:bg-white/10">
+                  Clear Focus
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="mb-3 grid gap-3 md:grid-cols-[1fr_96px]">
             <div>
@@ -273,6 +287,7 @@ export function DocumentManagementPanel({
                   <DocumentRow
                     key={document.document_id}
                     document={document}
+                    isSelected={selectedDocumentIds.includes(document.document_id)}
                     diagnostics={diagnostics?.document_id === document.document_id ? diagnostics : null}
                     isIngesting={isIngesting}
                     isLoadingDiagnostics={isLoadingDiagnostics}
@@ -333,6 +348,7 @@ function applyContextDefaults(
 
 function DocumentRow({
   document,
+  isSelected,
   diagnostics,
   isIngesting,
   isLoadingDiagnostics,
@@ -340,6 +356,7 @@ function DocumentRow({
   onDiagnostics,
 }: {
   document: DocumentManifest;
+  isSelected: boolean;
   diagnostics: DiagnosticsResponse | null;
   isIngesting: boolean;
   isLoadingDiagnostics: boolean;
@@ -353,12 +370,13 @@ function DocumentRow({
   const visibleWarnings = filterVisibleWarnings(document.warnings, hasLifecycleSuccess);
 
   return (
-    <div className="rounded-md border border-white/10 bg-[#101827] p-3">
+    <div className={`rounded-md border p-3 ${isSelected ? 'border-cyan-500/30 bg-cyan-500/10' : 'border-white/10 bg-[#101827]'}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="mb-1 flex flex-wrap items-center gap-2">
             <span className="text-sm font-semibold text-white">{document.title}</span>
             <OriginBadge origin={document.source_origin} fallbackOrigin="uploaded" />
+            {isSelected ? <Badge className="border-cyan-500/30 bg-cyan-500/15 text-cyan-100">Focused</Badge> : null}
             {requiresOcr ? <OcrRequiredBadge /> : null}
             <Badge className={requiresOcr ? 'border-amber-500/30 bg-amber-500/15 text-amber-100' : 'border-white/10 bg-white/5 text-slate-300'}>
               {statusLabel}
@@ -546,6 +564,14 @@ function OriginBadge({ origin, fallbackOrigin }: { origin?: string; fallbackOrig
   }
 
   return <Badge className="border-white/10 bg-white/5 text-slate-300">Maintenance KB</Badge>;
+}
+
+function formatFocusedDocuments(documents: DocumentManifest[], selectedDocumentIds: string[]): string {
+  if (selectedDocumentIds.length === 1) {
+    return documents.find((document) => document.document_id === selectedDocumentIds[0])?.title ?? 'the selected document';
+  }
+
+  return `${selectedDocumentIds.length} selected documents`;
 }
 
 function hasOcrRequiredWarning(warnings: string[] | undefined): boolean {

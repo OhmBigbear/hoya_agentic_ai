@@ -10,6 +10,7 @@ export type MaintenanceKbDocumentType =
   | 'other';
 
 export type MaintenanceKbConfidenceLabel = 'high' | 'medium' | 'low' | 'no_evidence';
+export type MaintenanceKbRetrievalScope = 'auto' | 'selected_documents' | 'global_kb';
 export type MaintenanceKbSourceOrigin = 'seeded' | 'uploaded' | string;
 export type MaintenanceKbDocumentStatus =
   | 'uploaded'
@@ -58,12 +59,19 @@ export interface MaintenanceKbSearchRequest {
   query?: string;
   limit?: number;
   top_k?: number;
+  retrieval_scope?: MaintenanceKbRetrievalScope;
+  document_ids?: string[];
+  document_types?: Array<Exclude<MaintenanceKbDocumentType, 'all'>>;
+  prefer_selected_documents?: boolean;
+  min_confidence?: number;
+  max_sources?: number;
 }
 
 export interface MaintenanceKbSourceReference {
   source_id: string;
   kb_id: string;
   title: string;
+  filename?: string;
   document_type: Exclude<MaintenanceKbDocumentType, 'all'>;
   version?: string;
   section?: string;

@@ -172,6 +172,12 @@ type SearchApiRequest = {
     document_type?: MaintenanceKbDocumentType;
   };
   top_k: number;
+  retrieval_scope?: MaintenanceKbSearchRequest['retrieval_scope'];
+  document_ids?: string[];
+  document_types?: Array<Exclude<MaintenanceKbDocumentType, 'all'>>;
+  prefer_selected_documents?: boolean;
+  min_confidence?: number;
+  max_sources?: number;
 };
 
 type ChatApiRequest = {
@@ -179,6 +185,12 @@ type ChatApiRequest = {
   context: SearchApiRequest['filters'];
   conversation_id?: string;
   trace_id?: string;
+  retrieval_scope?: MaintenanceKbSearchRequest['retrieval_scope'];
+  document_ids?: string[];
+  document_types?: Array<Exclude<MaintenanceKbDocumentType, 'all'>>;
+  prefer_selected_documents?: boolean;
+  min_confidence?: number;
+  max_sources?: number;
 };
 
 type QueryParams = Record<string, string | number | boolean | undefined>;
@@ -386,20 +398,45 @@ function toBackendFilters(request: MaintenanceKbSearchRequest): SearchApiRequest
 }
 
 export function toMaintenanceKbSearchApiRequest(request: MaintenanceKbSearchRequest): SearchApiRequest {
-  return {
+  const grounding = toRetrievalGrounding(request);
+
+  return omitUndefined({
     query: request.query,
     filters: toBackendFilters(request),
     top_k: request.top_k ?? request.limit ?? 20,
-  };
+    ...grounding,
+  }) as SearchApiRequest;
 }
 
 export function toMaintenanceKbChatApiRequest(request: MaintenanceKbChatRequest): ChatApiRequest {
-  return {
+  const grounding = toRetrievalGrounding(request.context);
+
+  return omitUndefined({
     message: request.message ?? request.question,
     context: toBackendFilters(request.context),
     conversation_id: request.conversation_id,
     trace_id: request.trace_id,
+    ...grounding,
+  }) as ChatApiRequest;
+}
+
+function toRetrievalGrounding(request: MaintenanceKbSearchRequest): Pick<SearchApiRequest, 'retrieval_scope' | 'document_ids' | 'document_types' | 'prefer_selected_documents' | 'min_confidence' | 'max_sources'> {
+  const documentIds = request.document_ids?.filter(Boolean);
+  const explicitScope = request.retrieval_scope;
+  const retrievalScope = explicitScope ?? (documentIds?.length ? 'selected_documents' : undefined);
+
+  return {
+    retrieval_scope: retrievalScope && retrievalScope !== 'auto' ? retrievalScope : explicitScope,
+    document_ids: documentIds?.length ? documentIds : undefined,
+    document_types: request.document_types?.length ? request.document_types : undefined,
+    prefer_selected_documents: documentIds?.length ? request.prefer_selected_documents ?? true : request.prefer_selected_documents,
+    min_confidence: request.min_confidence,
+    max_sources: request.max_sources,
   };
+}
+
+function omitUndefined<T extends Record<string, unknown>>(record: T): Partial<T> {
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined)) as Partial<T>;
 }
 
 function matchesDocumentType(document: MaintenanceKbSearchResult, request: MaintenanceKbSearchRequest): boolean {
@@ -501,18 +538,20 @@ function normalizeDocument(item: Partial<MaintenanceKbSearchResult> & Record<str
 function normalizeSource(source: Partial<MaintenanceKbSourceReference> & Record<string, unknown>, index: number): MaintenanceKbSourceReference {
   const metadata = getRecord(source.metadata);
   const kbId = String(source.kb_id ?? source.document_id ?? source.source_id ?? `source-${index + 1}`);
-  const score = source.relevance_score ?? source.score ?? source.match_score;
+  const score = source.relevance_score ?? source.score ?? source.match_score ?? source.confidence ?? metadata.score ?? metadata.confidence;
+  const filename = getString(source, 'filename', 'file_name') ?? getString(metadata, 'filename', 'file_name');
 
   return {
     source_id: String(source.source_id ?? `${kbId}-${index + 1}`),
     kb_id: kbId,
-    title: String(source.title ?? 'Untitled source'),
-    document_type: (source.document_type ?? metadata.document_type ?? 'maintenance') as Exclude<MaintenanceKbDocumentType, 'all'>,
+    title: String(source.title ?? metadata.title ?? filename ?? 'Untitled source'),
+    filename,
+    document_type: (source.document_type ?? source.type ?? metadata.document_type ?? metadata.type ?? 'maintenance') as Exclude<MaintenanceKbDocumentType, 'all'>,
     version: source.version ? String(source.version) : undefined,
-    section: source.section ? String(source.section) : undefined,
-    page: typeof source.page === 'number' ? source.page : undefined,
+    section: getString(source, 'section') ?? getString(metadata, 'section'),
+    page: typeof source.page === 'number' ? source.page : getNumber(metadata, 'page'),
     updated_at: source.updated_at ? String(source.updated_at) : undefined,
-    source_ref: String(source.source_ref ?? 'Source reference unavailable'),
+    source_ref: String(source.source_ref ?? source.reference ?? metadata.source_ref ?? metadata.reference ?? filename ?? 'Source reference unavailable'),
     excerpt: typeof source.excerpt === 'string' ? source.excerpt : undefined,
     source_origin: getString(source, 'source_origin') ?? getString(metadata, 'source_origin'),
     relevance_score: score === undefined ? undefined : normalizeScore(score),

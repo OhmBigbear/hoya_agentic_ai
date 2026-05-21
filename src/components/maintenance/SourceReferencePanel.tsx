@@ -26,8 +26,10 @@ export function SourceReferencePanel({ sources }: SourceReferencePanelProps) {
                 <div className="text-sm font-medium text-white">{source.title}</div>
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
                   <Badge className="border-white/10 bg-white/5 text-slate-300">{getDocumentTypeLabel(source.document_type)}</Badge>
+                  {source.filename ? <span>{source.filename}</span> : null}
                   {source.page ? <span>Page {source.page}</span> : null}
                   {source.section ? <span>{source.section}</span> : null}
+                  {source.score ?? source.relevance_score ? <span>{source.score ?? source.relevance_score}% score</span> : null}
                   {source.confidence_label ? <span>{getConfidenceLabel(source.confidence_label)} confidence</span> : null}
                   <OriginBadge origin={source.source_origin} />
                 </div>

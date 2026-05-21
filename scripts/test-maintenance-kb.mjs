@@ -194,6 +194,29 @@ globalThis.fetch = async (url, init = {}) => {
   }
 
   if (String(url).endsWith('/api/maintenance/kb/chat')) {
+    const body = init.body ? JSON.parse(init.body) : {};
+    if (body.message === '__no_evidence_selected__') {
+      return jsonResponse({
+        answer: 'No grounded maintenance evidence was found in the selected document.',
+        confidence: 0,
+        confidence_label: 'no_evidence',
+        sources: [],
+        related_documents: [],
+        suggested_questions: [],
+        warnings: [],
+        trace_id: 'trace-chat-no-evidence',
+        conversation_id: 'conversation-1',
+        retrieval_metadata: {
+          retrieval_scope: 'selected_documents',
+          selected_document_ids: body.document_ids ?? [],
+          no_evidence_reason: 'selected_document_no_evidence',
+        },
+        evidence_required: true,
+        evidence_satisfied: false,
+        restricted_guidance: true,
+      });
+    }
+
     return jsonResponse({
       answer: 'Use the approved bearing replacement procedure and verify LOTO before work.',
       confidence: 0.61,
@@ -203,6 +226,7 @@ globalThis.fetch = async (url, init = {}) => {
           source_id: 'src-kb-mnt-045-step-4',
           kb_id: 'KB-MNT-045',
           title: 'Precision Bearing Replacement Protocol',
+          filename: 'bearing-procedure.pdf',
           document_type: 'maintenance',
           version: 'v2.3',
           section: 'Installation and Verification',
@@ -368,7 +392,6 @@ try {
   }).document_type, 'other');
 
   assert.deepEqual(toMaintenanceKbSearchApiRequest(filters), {
-    query: undefined,
     filters: {
       line: 'rx1-surfacing',
       station: 'curve-generating',
@@ -387,6 +410,17 @@ try {
     },
     top_k: 5,
   });
+  assert.deepEqual(toMaintenanceKbSearchApiRequest({ ...filters, retrieval_scope: 'auto' }), {
+    filters: {
+      line: 'rx1-surfacing',
+      station: 'curve-generating',
+      machine: 'curve-gen-3b',
+      failure_type: 'mechanical',
+      document_type: undefined,
+    },
+    top_k: 5,
+    retrieval_scope: 'auto',
+  });
   assert.deepEqual(toMaintenanceKbChatApiRequest({
     question: 'Question',
     context: filters,
@@ -404,6 +438,73 @@ try {
     conversation_id: 'conversation-existing',
     trace_id: 'trace-existing',
   });
+  assert.deepEqual(toMaintenanceKbSearchApiRequest({
+    ...filters,
+    retrieval_scope: 'selected_documents',
+    document_ids: ['doc-upload-1'],
+    document_types: ['maintenance'],
+  }), {
+    filters: {
+      line: 'rx1-surfacing',
+      station: 'curve-generating',
+      machine: 'curve-gen-3b',
+      failure_type: 'mechanical',
+      document_type: undefined,
+    },
+    top_k: 5,
+    retrieval_scope: 'selected_documents',
+    document_ids: ['doc-upload-1'],
+    document_types: ['maintenance'],
+    prefer_selected_documents: true,
+  });
+  assert.deepEqual(toMaintenanceKbChatApiRequest({
+    question: 'Question',
+    context: {
+      ...filters,
+      retrieval_scope: 'selected_documents',
+      document_ids: ['doc-upload-1'],
+      document_types: ['maintenance'],
+      max_sources: 3,
+    },
+  }), {
+    message: 'Question',
+    context: {
+      line: 'rx1-surfacing',
+      station: 'curve-generating',
+      machine: 'curve-gen-3b',
+      failure_type: 'mechanical',
+      document_type: undefined,
+    },
+    retrieval_scope: 'selected_documents',
+    document_ids: ['doc-upload-1'],
+    document_types: ['maintenance'],
+    prefer_selected_documents: true,
+    max_sources: 3,
+  });
+
+  const selectedChatResponse = await askMaintenanceKbAssistant({
+    question: '__no_evidence_selected__',
+    context: {
+      ...filters,
+      retrieval_scope: 'selected_documents',
+      document_ids: ['doc-upload-1'],
+      document_types: ['maintenance'],
+    },
+  });
+  assert.deepEqual(JSON.parse(fetchCalls.at(-1).init.body), {
+    message: '__no_evidence_selected__',
+    context: {
+      line: 'rx1-surfacing',
+      station: 'curve-generating',
+      machine: 'curve-gen-3b',
+      failure_type: 'mechanical',
+    },
+    retrieval_scope: 'selected_documents',
+    document_ids: ['doc-upload-1'],
+    document_types: ['maintenance'],
+    prefer_selected_documents: true,
+  });
+  assert.equal(selectedChatResponse.retrieval_metadata?.no_evidence_reason, 'selected_document_no_evidence');
 
   assert.equal(searchResponse.items[0].kb_id, 'KB-MNT-045');
   assert.equal(searchResponse.items[0].match_score, 98);
@@ -538,6 +639,14 @@ try {
   assert.doesNotMatch(documentsHtml, /match/);
   assert.match(documentsHtml, /Uploaded KB/);
 
+  const focusedDocumentsHtml = renderToStaticMarkup(React.createElement(DocumentResultList, {
+    documents: searchResponse.items,
+    isLoading: false,
+    error: null,
+    selectedDocuments: [manifests[0]],
+  }));
+  assert.match(focusedDocumentsHtml, /AI search is focusing on Uploaded Bearing Procedure/);
+
   const emptyDocumentsHtml = renderToStaticMarkup(React.createElement(DocumentResultList, {
     documents: [],
     isLoading: false,
@@ -569,8 +678,10 @@ try {
   assert.match(assistantHtml, /61%/);
   assert.match(assistantHtml, /Source References/);
   assert.match(assistantHtml, /Maintenance Document/);
+  assert.match(assistantHtml, /bearing-procedure\.pdf/);
   assert.match(assistantHtml, /Page 8/);
   assert.match(assistantHtml, /Installation and Verification/);
+  assert.match(assistantHtml, /96% score/);
   assert.match(assistantHtml, /low confidence/);
   assert.match(assistantHtml, /Uploaded evidence excerpt/);
   assert.match(assistantHtml, /Uploaded KB/);
@@ -578,7 +689,6 @@ try {
   assert.match(assistantHtml, /Restricted guidance/);
   assert.doesNotMatch(assistantHtml, /Trace:/);
   assert.doesNotMatch(assistantHtml, /trace-chat-1/);
-  assert.doesNotMatch(assistantHtml, /96% score/);
   assert.doesNotMatch(assistantHtml, /SOP KB-MNT-045, step 4\.2 and 5\.1/);
   assert.match(assistantHtml, /Spindle bearing noise/);
   assert.match(assistantHtml, /Similar spindle noise/);
@@ -596,7 +706,23 @@ try {
     onSendQuestion: () => {},
     onSelectQuestion: () => {},
   }));
-  assert.match(noEvidenceHtml, /No evidence found/);
+  assert.match(noEvidenceHtml, /Not enough indexed knowledge was found\./);
+
+  const selectedNoEvidenceHtml = renderToStaticMarkup(React.createElement(AssistantPanel, {
+    context,
+    filters,
+    response: selectedChatResponse,
+    question: 'Unknown selected document issue',
+    isLoading: false,
+    error: null,
+    relatedHistory: [],
+    selectedDocuments: [manifests[0]],
+    onQuestionChange: () => {},
+    onSendQuestion: () => {},
+    onSelectQuestion: () => {},
+  }));
+  assert.match(selectedNoEvidenceHtml, /Focusing on Uploaded Bearing Procedure/);
+  assert.match(selectedNoEvidenceHtml, /No reliable evidence was found in the selected document\./);
 
   const managementHtml = renderToStaticMarkup(React.createElement(DocumentManagementPanel, {
     documents: [
@@ -621,6 +747,8 @@ try {
     onRefresh: async () => {},
     onSearchFiltersChange: () => {},
     searchFilters: filters,
+    selectedDocumentIds: ['doc-upload-1'],
+    onClearSelectedDocuments: () => {},
   }));
   assert.match(managementHtml, /Upload Document/);
   assert.match(managementHtml, /Document Status/);
@@ -628,6 +756,9 @@ try {
   assert.match(managementHtml, /Knowledge Document/);
   assert.match(managementHtml, /Other Document/);
   assert.match(managementHtml, /Uploaded Bearing Procedure/);
+  assert.match(managementHtml, /AI is focusing on Uploaded Bearing Procedure/);
+  assert.match(managementHtml, /Clear Focus/);
+  assert.match(managementHtml, /Focused/);
   assert.match(managementHtml, /Processing Status/);
   assert.match(managementHtml, /Parsed/);
   assert.match(managementHtml, /Process Document/);

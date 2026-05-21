@@ -5,6 +5,7 @@ import { Button } from '../../app/components/ui/button';
 import { Progress } from '../../app/components/ui/progress';
 import { Textarea } from '../../app/components/ui/textarea';
 import type {
+  DocumentManifest,
   MaintenanceKbChatResponse,
   MaintenanceKbContext,
   MaintenanceKbRelatedHistoryItem,
@@ -23,6 +24,7 @@ interface AssistantPanelProps {
   error?: string | null;
   relatedHistory: MaintenanceKbRelatedHistoryItem[];
   selectedDocumentRequiresOcr?: boolean;
+  selectedDocuments?: DocumentManifest[];
   onQuestionChange: (question: string) => void;
   onSendQuestion: () => void;
   onSelectQuestion: (question: string) => void;
@@ -37,6 +39,7 @@ export function AssistantPanel({
   error,
   relatedHistory,
   selectedDocumentRequiresOcr = false,
+  selectedDocuments = [],
   onQuestionChange,
   onSendQuestion,
   onSelectQuestion,
@@ -73,6 +76,11 @@ export function AssistantPanel({
             <Badge className="border-cyan-500/30 bg-cyan-500/20 text-cyan-200">{machine}</Badge>
             <Badge className="border-blue-500/30 bg-blue-500/20 text-blue-200">{station}</Badge>
             <Badge className="border-purple-500/30 bg-purple-500/20 text-purple-200">{failureType}</Badge>
+            {selectedDocuments.length ? (
+              <Badge className="border-cyan-500/30 bg-cyan-500/15 text-cyan-100">
+                Focusing on {formatSelectedDocumentNames(selectedDocuments)}
+              </Badge>
+            ) : null}
           </div>
         </div>
         {selectedDocumentRequiresOcr ? (
@@ -157,6 +165,7 @@ export function AssistantPanel({
 function ConfidenceBlock({ response }: { response: MaintenanceKbChatResponse }) {
   const hasNoEvidence = response.confidence_label === 'no_evidence' || response.sources.length === 0;
   const isLowConfidence = response.confidence_label === 'low' || response.confidence < 70;
+  const noEvidenceMessage = getNoEvidenceMessage(response);
 
   return (
     <div className="rounded-md border border-white/10 bg-[#101827] p-3">
@@ -171,7 +180,7 @@ function ConfidenceBlock({ response }: { response: MaintenanceKbChatResponse }) 
       {hasNoEvidence ? (
         <div className="mt-2 flex gap-2 rounded-md border border-amber-500/25 bg-amber-500/10 p-2 text-xs text-amber-100">
           <FileWarning className="h-4 w-4 shrink-0" />
-          <span>No evidence is available for the selected context. Treat this as restricted guidance.</span>
+          <span>{noEvidenceMessage}</span>
         </div>
       ) : null}
       {isLowConfidence && !hasNoEvidence ? (
@@ -188,6 +197,26 @@ function ConfidenceBlock({ response }: { response: MaintenanceKbChatResponse }) 
       ))}
     </div>
   );
+}
+
+function getNoEvidenceMessage(response: MaintenanceKbChatResponse): string {
+  const metadata = response.retrieval_metadata ?? {};
+  const scope = typeof metadata.retrieval_scope === 'string' ? metadata.retrieval_scope : undefined;
+  const reason = typeof metadata.no_evidence_reason === 'string' ? metadata.no_evidence_reason.toLowerCase() : '';
+
+  if (scope === 'selected_documents' || /selected|document/.test(reason)) {
+    return 'No reliable evidence was found in the selected document.';
+  }
+
+  return 'Not enough indexed knowledge was found.';
+}
+
+function formatSelectedDocumentNames(documents: DocumentManifest[]): string {
+  if (documents.length === 1) {
+    return documents[0].title;
+  }
+
+  return `${documents.length} selected documents`;
 }
 
 function GovernanceBlock({ response }: { response: MaintenanceKbChatResponse }) {

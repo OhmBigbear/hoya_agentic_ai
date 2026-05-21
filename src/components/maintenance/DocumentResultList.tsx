@@ -1,6 +1,6 @@
 import { AlertTriangle, Loader2, SearchX } from 'lucide-react';
 import type { ReactNode } from 'react';
-import type { MaintenanceKbSearchResult } from '../../types/maintenanceKb';
+import type { DocumentManifest, MaintenanceKbSearchResult } from '../../types/maintenanceKb';
 import { DocumentCard } from './DocumentCard';
 
 interface DocumentResultListProps {
@@ -8,9 +8,10 @@ interface DocumentResultListProps {
   isLoading: boolean;
   error?: string | null;
   selectedDocumentRequiresOcr?: boolean;
+  selectedDocuments?: DocumentManifest[];
 }
 
-export function DocumentResultList({ documents, isLoading, error, selectedDocumentRequiresOcr = false }: DocumentResultListProps) {
+export function DocumentResultList({ documents, isLoading, error, selectedDocumentRequiresOcr = false, selectedDocuments = [] }: DocumentResultListProps) {
   return (
     <section className="flex min-h-0 flex-1 flex-col border-r border-white/10 bg-[#0a0f1e]">
       <div className="shrink-0 border-b border-white/10 p-5">
@@ -19,6 +20,11 @@ export function DocumentResultList({ documents, isLoading, error, selectedDocume
         {selectedDocumentRequiresOcr ? (
           <div className="mt-3 rounded-md border border-amber-500/25 bg-amber-500/10 p-2 text-xs text-amber-100">
             Selected document is not searchable yet because OCR is required.
+          </div>
+        ) : null}
+        {selectedDocuments.length ? (
+          <div className="mt-3 rounded-md border border-cyan-500/20 bg-cyan-500/10 p-2 text-xs text-cyan-100">
+            AI search is focusing on {formatSelectedDocumentNames(selectedDocuments)}.
           </div>
         ) : null}
       </div>
@@ -40,6 +46,14 @@ export function DocumentResultList({ documents, isLoading, error, selectedDocume
       </div>
     </section>
   );
+}
+
+function formatSelectedDocumentNames(documents: DocumentManifest[]): string {
+  if (documents.length === 1) {
+    return documents[0].title;
+  }
+
+  return `${documents.length} selected documents`;
 }
 
 function StateMessage({

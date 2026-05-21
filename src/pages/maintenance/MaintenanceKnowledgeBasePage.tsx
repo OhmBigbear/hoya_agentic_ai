@@ -77,6 +77,7 @@ export function MaintenanceKnowledgeBasePage({
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [traceId, setTraceId] = useState<string | undefined>();
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
 
   useEffect(() => {
     let isMounted = true;
@@ -134,6 +135,19 @@ export function MaintenanceKnowledgeBasePage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [context]);
 
+  const contextForPanel = useMemo(() => context ?? undefined, [context]);
+  const selectedDocuments = useMemo(
+    () => selectedDocumentIds
+      .map((documentId) => documentManifests.find((document) => document.document_id === documentId))
+      .filter((document): document is DocumentManifest => Boolean(document)),
+    [documentManifests, selectedDocumentIds],
+  );
+  const groundedFilters = useMemo(
+    () => withRetrievalGrounding(filters, selectedDocumentIds, selectedDocuments),
+    [filters, selectedDocumentIds, selectedDocuments],
+  );
+  const selectedDocumentRequiresOcr = shouldTreatDiagnosticsAsOcrRequired(diagnostics);
+
   useEffect(() => {
     if (!context) {
       return;
@@ -145,7 +159,7 @@ export function MaintenanceKnowledgeBasePage({
       setIsSearchLoading(true);
       setSearchError(null);
       try {
-        const response = await searchMaintenanceKbDocuments(filters);
+        const response = await searchMaintenanceKbDocuments(groundedFilters);
         if (isMounted) {
           setDocuments(response.items);
         }
@@ -166,10 +180,7 @@ export function MaintenanceKnowledgeBasePage({
     return () => {
       isMounted = false;
     };
-  }, [context, filters]);
-
-  const contextForPanel = useMemo(() => context ?? undefined, [context]);
-  const selectedDocumentRequiresOcr = shouldTreatDiagnosticsAsOcrRequired(diagnostics);
+  }, [context, groundedFilters]);
 
   useEffect(() => {
     if (!uploadNotice) {
@@ -194,7 +205,7 @@ export function MaintenanceKnowledgeBasePage({
     try {
       const response = await askMaintenanceKbAssistant({
         question: trimmedQuestion,
-        context: filters,
+        context: groundedFilters,
         conversation_id: conversationId,
         trace_id: traceId,
       });
@@ -257,6 +268,7 @@ export function MaintenanceKnowledgeBasePage({
   };
 
   const handleDiagnostics = async (documentId: string) => {
+    setSelectedDocumentIds([documentId]);
     setIsDiagnosticsLoading(true);
     setDiagnosticsError(null);
     try {
@@ -268,6 +280,20 @@ export function MaintenanceKnowledgeBasePage({
     } finally {
       setIsDiagnosticsLoading(false);
     }
+  };
+
+  const handleFiltersChange = (nextFilters: MaintenanceKbSearchRequest) => {
+    const changedContext = hasRetrievalContextChanged(filters, nextFilters);
+    setFilters(nextFilters);
+    if (changedContext) {
+      clearSelectedDocuments();
+    }
+  };
+
+  const clearSelectedDocuments = () => {
+    setSelectedDocumentIds([]);
+    setDiagnostics(null);
+    setDiagnosticsError(null);
   };
 
   return (
@@ -290,7 +316,7 @@ export function MaintenanceKnowledgeBasePage({
               Loading maintenance knowledge context...
             </div>
           ) : (
-            <FilterPanel context={context} filters={filters} onFiltersChange={setFilters} />
+            <FilterPanel context={context} filters={filters} onFiltersChange={handleFiltersChange} />
           )}
         </div>
 
@@ -321,13 +347,16 @@ export function MaintenanceKnowledgeBasePage({
                 onDiagnostics={handleDiagnostics}
                 onRefresh={refreshDocuments}
                 searchFilters={filters}
-                onSearchFiltersChange={setFilters}
+                onSearchFiltersChange={handleFiltersChange}
+                selectedDocumentIds={selectedDocumentIds}
+                onClearSelectedDocuments={clearSelectedDocuments}
               />
               <DocumentResultList
                 documents={documents}
                 isLoading={isContextLoading || isSearchLoading}
                 error={searchError}
                 selectedDocumentRequiresOcr={selectedDocumentRequiresOcr}
+                selectedDocuments={selectedDocuments}
               />
             </section>
             <AssistantPanel
@@ -339,6 +368,7 @@ export function MaintenanceKnowledgeBasePage({
               error={assistantError}
               relatedHistory={assistantResponse?.related_history ?? relatedHistory}
               selectedDocumentRequiresOcr={selectedDocumentRequiresOcr}
+              selectedDocuments={selectedDocuments}
               onQuestionChange={setQuestion}
               onSendQuestion={handleSendQuestion}
               onSelectQuestion={handleSelectSuggestedQuestion}
@@ -361,6 +391,45 @@ function shouldTreatDiagnosticsAsOcrRequired(diagnostics: DiagnosticsResponse | 
   }
 
   return !diagnostics.ocr_status || !/^(native_text|native_text_success|skipped|ocr_skipped|completed|ocr_completed|success)$/i.test(diagnostics.ocr_status);
+}
+
+function withRetrievalGrounding(
+  filters: MaintenanceKbSearchRequest,
+  selectedDocumentIds: string[],
+  selectedDocuments: DocumentManifest[],
+): MaintenanceKbSearchRequest {
+  if (!selectedDocumentIds.length) {
+    const {
+      retrieval_scope: _retrievalScope,
+      document_ids: _documentIds,
+      document_types: _documentTypes,
+      prefer_selected_documents: _preferSelectedDocuments,
+      ...baseFilters
+    } = filters;
+    return {
+      ...baseFilters,
+      retrieval_scope: 'auto',
+    };
+  }
+
+  return {
+    ...filters,
+    retrieval_scope: 'selected_documents',
+    document_ids: selectedDocumentIds,
+    document_types: selectedDocuments.length ? Array.from(new Set(selectedDocuments.map((document) => document.document_type))) : undefined,
+    prefer_selected_documents: true,
+  };
+}
+
+function hasRetrievalContextChanged(current: MaintenanceKbSearchRequest, next: MaintenanceKbSearchRequest): boolean {
+  return (
+    current.line !== next.line
+    || current.production_line !== next.production_line
+    || current.station !== next.station
+    || current.machine !== next.machine
+    || current.failure_type !== next.failure_type
+    || current.document_type !== next.document_type
+  );
 }
 
 function UploadNotice({ tone, message }: { tone: 'success' | 'error'; message: string }) {
