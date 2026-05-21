@@ -807,9 +807,12 @@ try {
   assert.match(managementHtml, /Processing Status/);
   assert.match(managementHtml, /Parsed/);
   assert.match(managementHtml, /Process Document/);
-  assert.match(managementHtml, /Details/);
-  assert.match(managementHtml, /Archive/);
-  assert.match(managementHtml, /Delete/);
+  assert.match(managementHtml, /aria-label="Details"/);
+  assert.match(managementHtml, /title="Details"/);
+  assert.match(managementHtml, /aria-label="Archive"/);
+  assert.match(managementHtml, /title="Archive"/);
+  assert.match(managementHtml, /aria-label="Delete"/);
+  assert.match(managementHtml, /title="Delete"/);
   assert.match(managementHtml, /Ready for AI Search/);
   assert.doesNotMatch(managementHtml, /trace-diagnostics-1/);
   assert.doesNotMatch(managementHtml, /indexing_metadata/);

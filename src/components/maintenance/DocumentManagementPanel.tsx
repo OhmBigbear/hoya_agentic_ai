@@ -500,23 +500,22 @@ function DocumentRow({
             </div>
           ) : null}
         </div>
-        <div className="flex shrink-0 flex-wrap justify-end gap-2">
+        <div className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
           <Button type="button" size="sm" onClick={() => void onIngest(document.document_id)} disabled={isIngesting || requiresOcr} title={requiresOcr ? 'OCR is required before processing can run.' : undefined} className="bg-cyan-500/20 text-cyan-100 hover:bg-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-50">
             {isIngesting ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="mr-2 h-3.5 w-3.5" />}
             Process Document
           </Button>
-          <Button type="button" size="sm" variant="outline" onClick={() => void onDiagnostics(document.document_id)} disabled={isLoadingDiagnostics} className="border-white/10 bg-white/5 text-slate-200 hover:bg-white/10">
-            {isLoadingDiagnostics ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Stethoscope className="mr-2 h-3.5 w-3.5" />}
-            Details
-          </Button>
-          <Button type="button" size="sm" variant="outline" onClick={() => onArchive(document)} className="border-amber-500/30 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20">
-            <Archive className="mr-2 h-3.5 w-3.5" />
-            Archive
-          </Button>
-          <Button type="button" size="sm" variant="outline" onClick={() => onDelete(document)} className="border-red-500/40 bg-red-500/10 text-red-100 hover:bg-red-500/20">
-            <Trash2 className="mr-2 h-3.5 w-3.5" />
-            Delete
-          </Button>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Button type="button" size="sm" variant="outline" aria-label="Details" title="Details" onClick={() => void onDiagnostics(document.document_id)} disabled={isLoadingDiagnostics} className="h-8 w-8 border-white/10 bg-white/5 p-0 text-slate-200 hover:bg-white/10">
+              {isLoadingDiagnostics ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Stethoscope className="h-3.5 w-3.5" />}
+            </Button>
+            <Button type="button" size="sm" variant="outline" aria-label="Archive" title="Archive" onClick={() => onArchive(document)} className="h-8 w-8 border-amber-500/30 bg-amber-500/10 p-0 text-amber-100 hover:bg-amber-500/20">
+              <Archive className="h-3.5 w-3.5" />
+            </Button>
+            <Button type="button" size="sm" variant="outline" aria-label="Delete" title="Delete" onClick={() => onDelete(document)} className="h-8 w-8 border-red-500/40 bg-red-500/10 p-0 text-red-100 hover:bg-red-500/20">
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
         </div>
       </div>
     </div>
