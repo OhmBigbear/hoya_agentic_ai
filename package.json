@@ -14,7 +14,7 @@
     "maintenance:smoke:api": "node scripts/maintenance/smoke-maintenance-api.mjs",
     "server:maintenance": "node src/server/server.mjs",
     "server:maintenance:dev": "node --watch src/server/server.mjs",
-    "test": "node scripts/test-maintenance-kb.mjs",
+    "test": "node scripts/test-maintenance-kb.mjs && node scripts/test-maintenance-normalize-sql.mjs",
     "test:maintenance-backend": "node scripts/test-maintenance-backend-api.mjs",
     "test:maintenance-workorder": "node scripts/test-maintenance-workorder-api.mjs"
   },
