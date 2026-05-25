@@ -14,12 +14,33 @@ The runtime intentionally does not add UI pages, Agentic Core tools, skills, or 
 
 ## Environment
 
+Backend runtime:
+
 - `DATABASE_URL`: required PostgreSQL connection string.
-- `MAINTENANCE_API_HOST`: optional, default `127.0.0.1`.
+- `MAINTENANCE_API_HOST`: optional, default `0.0.0.0` so the API is reachable from browsers, WSL, Docker, and local network development environments.
 - `MAINTENANCE_API_PORT`: optional, default `3101`.
+- `MAINTENANCE_API_CORS_ORIGINS`: optional comma- or space-separated browser origin allowlist. Defaults to `http://localhost:5173` and `http://127.0.0.1:5173` for Vite development. Set to `*` only for explicit local development scenarios; production should use concrete origins.
 - `PGPOOL_MAX`: optional pool size, default `10`.
 - `PGQUERY_TIMEOUT_MS`: optional query timeout, default `15000`.
 - `PGSTATEMENT_TIMEOUT_MS`: optional statement timeout, default `15000`.
+
+Frontend Maintenance Workorder Tracking UI:
+
+- `VITE_MAINTENANCE_API_BASE_URL`: optional browser API base URL, default `http://localhost:3101`. For WSL/browser development, prefer `http://127.0.0.1:3101`.
+
+Example:
+
+```bash
+VITE_MAINTENANCE_API_BASE_URL=http://127.0.0.1:3101 npm run dev
+```
+
+If the frontend runs from a different dev origin, add it to the backend allowlist:
+
+```bash
+MAINTENANCE_API_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173 npm run server:maintenance
+```
+
+The Maintenance Workorder Tracking UI calls this runtime directly. It does not use the Agentic Core API client and is not blocked by `VITE_APP_MODE=mock`.
 
 Secrets are not logged. If `DATABASE_URL` is missing, startup fails with a clear non-secret error.
 

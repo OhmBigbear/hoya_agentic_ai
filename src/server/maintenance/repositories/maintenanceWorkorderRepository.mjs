@@ -6,9 +6,9 @@ const WORKORDER_FILTERS = {
   department: { column: 'department' },
   equipment_no: { column: 'equipment_no' },
   workorder_no: { column: 'workorder_no' },
-  status: { column: 'status' },
-  job_type: { column: 'job_type' },
-  priority: { column: 'priority' },
+  status: { column: 'status', operator: 'lower' },
+  job_type: { column: 'job_type', operator: 'lower' },
+  priority: { column: 'priority', operator: 'lower' },
 };
 
 const HISTORY_FILTERS = {
@@ -98,6 +98,7 @@ export function buildWorkordersQuery(filters = {}) {
   const { limit, offset } = parsePagination(filters);
   const { whereSql, values } = buildWhereClause(filters, WORKORDER_FILTERS);
   const predicates = whereSql ? [whereSql.replace(/^WHERE /, '')] : [];
+  addWorkorderOperationalPredicates(predicates, values, filters);
   addDateWindow(predicates, values, 'coalesce(act_work_start, plan_start)', filters.from, filters.to);
   const finalWhere = predicates.length ? `WHERE ${predicates.join(' AND ')}` : '';
   values.push(limit, offset);
@@ -112,6 +113,32 @@ export function buildWorkordersQuery(filters = {}) {
     limit,
     offset,
   };
+}
+
+export function addWorkorderOperationalPredicates(predicates, values, filters = {}) {
+  if (filters.q) {
+    values.push(`%${String(filters.q).trim()}%`);
+    predicates.push(`(
+      workorder_no ILIKE $${values.length}
+      OR equipment_no ILIKE $${values.length}
+      OR equipment_desc ILIKE $${values.length}
+      OR failure_description ILIKE $${values.length}
+      OR reason ILIKE $${values.length}
+    )`);
+  }
+
+  if (filters.overdue === 'true' || filters.overdue === true) {
+    predicates.push(`plan_finish < now() AND lower(coalesce(status, '')) NOT IN ('completed', 'closed', 'cancelled')`);
+  }
+
+  if (filters.waiting_parts === 'true' || filters.waiting_parts === true) {
+    predicates.push(`(
+      lower(coalesce(status, '')) LIKE '%hold%'
+      OR lower(coalesce(status, '')) LIKE '%waiting%'
+      OR lower(coalesce(reason, '')) LIKE '%part%'
+      OR lower(coalesce(failure_description, '')) LIKE '%part%'
+    )`);
+  }
 }
 
 export function buildEquipmentHistoryQuery(equipmentNo, filters = {}) {

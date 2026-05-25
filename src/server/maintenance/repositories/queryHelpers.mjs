@@ -20,9 +20,17 @@ export function buildWhereClause(filters, filterMap) {
 
     values.push(value);
     const placeholder = `$${values.length}`;
-    predicates.push(config.operator === 'ilike'
-      ? `${config.column} ILIKE ${placeholder}`
-      : `${config.column} = ${placeholder}`);
+    if (config.operator === 'ilike') {
+      predicates.push(`${config.column} ILIKE ${placeholder}`);
+      return;
+    }
+
+    if (config.operator === 'lower') {
+      predicates.push(`lower(coalesce(${config.column}, '')) = lower(${placeholder})`);
+      return;
+    }
+
+    predicates.push(`${config.column} = ${placeholder}`);
   });
 
   return {

@@ -139,6 +139,7 @@ export interface MaintenanceDashboardSummary {
 }
 
 export interface MaintenanceQueryFilters {
+  q?: string;
   site?: string;
   location?: string;
   department?: string;
@@ -153,6 +154,9 @@ export interface MaintenanceQueryFilters {
   from?: string;
   to?: string;
   limit?: number;
+  offset?: number;
+  overdue?: boolean;
+  waiting_parts?: boolean;
 }
 
 export interface MaintenanceApiResponse<T> {

@@ -48,10 +48,16 @@ In a separate shell with `DATABASE_URL` set:
 npm run server:maintenance
 ```
 
-By default the backend listens on `http://127.0.0.1:3101`. If needed:
+By default the backend binds to `0.0.0.0:3101` and prints browser-friendly URLs such as `http://127.0.0.1:3101` and `http://localhost:3101`. If needed:
 
 ```bash
 MAINTENANCE_API_PORT=8787 npm run server:maintenance
+```
+
+For WSL/browser development, point the frontend at the loopback URL:
+
+```bash
+VITE_MAINTENANCE_API_BASE_URL=http://127.0.0.1:3101 npm run dev
 ```
 
 ## Smoke Tests

@@ -1,13 +1,25 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 
-process.env.VITE_APP_MODE = 'production';
+process.env.VITE_APP_MODE = 'mock';
 process.env.VITE_AGENTIC_CORE_API_BASE_URL = 'http://agentic-core.test';
+process.env.VITE_MAINTENANCE_API_BASE_URL = 'http://maintenance-runtime.test';
+
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const fetchCalls = [];
 globalThis.fetch = async (url, init = {}) => {
   fetchCalls.push({ url: String(url), init });
   const requestUrl = new URL(String(url));
+
+  assert.equal(requestUrl.origin, 'http://maintenance-runtime.test');
+
+  if (requestUrl.pathname === '/api/health') {
+    return jsonResponse({ service: 'hoya-ui-maintenance-api', status: 'ok' });
+  }
 
   if (requestUrl.pathname === '/api/maintenance/workorders') {
     assert.equal(requestUrl.searchParams.get('site'), 'HOYA-BKK');
@@ -112,6 +124,11 @@ const server = await createServer({
 
 try {
   const api = await server.ssrLoadModule('/src/services/maintenanceWorkorderApi.ts');
+  const serviceSource = await readFile(path.join(rootDir, 'src/services/maintenanceWorkorderApi.ts'), 'utf8');
+
+  assert.doesNotMatch(serviceSource, /agenticCoreClient/, 'Maintenance Runtime API must not call Agentic Core client.');
+  assert.equal(api.getMaintenanceRuntimeApiBaseUrl(), 'http://maintenance-runtime.test');
+  const health = await api.getMaintenanceApiHealth();
   const workorders = await api.getWorkorderTracking({ site: 'HOYA-BKK', status: 'OPEN', limit: 25 });
   const detail = await api.getWorkorderDetail('WO-1001');
   const history = await api.getMachineMaintenanceHistory('MC-01', { from: '2026-01-01' });
@@ -122,7 +139,10 @@ try {
   const stock = await api.getStockRiskSummary();
   const dashboard = await api.getMaintenanceDashboardSummary();
 
-  assert.equal(fetchCalls[0].url, 'http://agentic-core.test/api/maintenance/workorders?site=HOYA-BKK&status=OPEN&limit=25');
+  assert.equal(health.service, 'hoya-ui-maintenance-api');
+  assert.equal(fetchCalls[0].url, 'http://maintenance-runtime.test/api/health');
+  assert.equal(fetchCalls[1].url, 'http://maintenance-runtime.test/api/maintenance/workorders?site=HOYA-BKK&status=OPEN&limit=25');
+  assert.ok(fetchCalls.every((call) => new URL(call.url).pathname.startsWith('/api/maintenance/') || new URL(call.url).pathname === '/api/health'));
   assert.equal(workorders.trace_id, 'trace-workorders');
   assert.equal(workorders.total, 1);
   assert.equal(workorders.data[0].total_repair_time_hours, 0);
@@ -165,10 +185,9 @@ try {
 
   assert.throws(() => api.getWorkorderDetail(''), /workorderNo is required/);
 
-  const { agenticCoreClient } = await server.ssrLoadModule('/src/shared/api/agenticCoreClient.ts');
   await assert.rejects(
-    () => agenticCoreClient.get('/api/maintenance/analytics/error'),
-    /Agentic Core API request failed with 503 Service Unavailable: Database view unavailable/,
+    () => fetchAndNormalizeError(api),
+    /Maintenance API request failed with 503 Service Unavailable: Database view unavailable/,
   );
 
   const queryScript = await import('./maintenance/query-maintenance.mjs');
@@ -201,6 +220,15 @@ function jsonResponse(body) {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+async function fetchAndNormalizeError(api) {
+  const url = api.buildMaintenanceRuntimeUrl('/api/maintenance/analytics/error');
+  const response = await fetch(url);
+  if (!response.ok) {
+    const responseBody = await response.text();
+    throw new Error(`Maintenance API request failed with ${response.status} ${response.statusText}: ${responseBody}`);
+  }
 }
 
 console.log('Maintenance workorder API tests passed.');

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { getJson, usageText as apiSmokeUsageText } from './maintenance/smoke-maintenance-api.mjs';
 import { requireDatabaseUrl as requireSmokeDatabaseUrl, usageText as dataSmokeUsageText } from './maintenance/smoke-maintenance-real-data.mjs';
+import { createCorsHandler } from '../src/server/cors.mjs';
 import { assertDatabaseUrl, MissingDatabaseUrlError } from '../src/server/db/postgres.mjs';
 import { buildHoldReasonsQuery, buildMtbfMttrQuery } from '../src/server/maintenance/repositories/maintenanceAnalyticsRepository.mjs';
 import { buildStockRiskQuery } from '../src/server/maintenance/repositories/maintenanceInventoryRepository.mjs';
@@ -16,6 +17,7 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 testQueryBuilders();
 await testRoutes();
+await testCors();
 await testNoStagingRuntimeReferences();
 await testSmokeScriptHelpAndFailureModes();
 testNoCommittedUploads();
@@ -134,6 +136,44 @@ async function testRoutes() {
   assert.equal(failure.body.error.code, 'DATABASE_SCHEMA_UNAVAILABLE');
 }
 
+async function testCors() {
+  let hitCount = 0;
+  const router = createCorsHandler(async (_request, response) => {
+    hitCount += 1;
+    response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    response.end(JSON.stringify({ ok: true }));
+  }, { allowedOrigins: ['http://localhost:5173'] });
+
+  const preflight = await invoke(router, '/api/maintenance/workorders', 'OPTIONS', {
+    origin: 'http://localhost:5173',
+    'access-control-request-headers': 'content-type',
+  });
+  assert.equal(preflight.statusCode, 204);
+  assert.equal(hitCount, 0);
+  assert.equal(preflight.headers['Access-Control-Allow-Origin'], 'http://localhost:5173');
+  assert.equal(preflight.headers['Access-Control-Allow-Methods'], 'GET, OPTIONS');
+  assert.equal(preflight.headers['Access-Control-Allow-Headers'], 'content-type');
+  assert.equal(preflight.headers['Access-Control-Max-Age'], '86400');
+
+  const allowed = await invoke(router, '/api/health', 'GET', { origin: 'http://localhost:5173' });
+  assert.equal(allowed.statusCode, 200);
+  assert.equal(allowed.headers['Access-Control-Allow-Origin'], 'http://localhost:5173');
+  assert.equal(allowed.headers['Access-Control-Allow-Methods'], 'GET, OPTIONS');
+  assert.deepEqual(allowed.body, { ok: true });
+
+  const disallowed = await invoke(router, '/api/health', 'GET', { origin: 'http://evil.test' });
+  assert.equal(disallowed.statusCode, 200);
+  assert.notEqual(disallowed.headers['Access-Control-Allow-Origin'], '*');
+  assert.equal(disallowed.headers['Access-Control-Allow-Origin'], undefined);
+
+  const wildcardRouter = createCorsHandler(async (_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    response.end(JSON.stringify({ ok: true }));
+  }, { allowedOrigins: ['*'] });
+  const wildcard = await invoke(wildcardRouter, '/api/health', 'GET', { origin: 'http://dev-only.test' });
+  assert.equal(wildcard.headers['Access-Control-Allow-Origin'], '*');
+}
+
 function testMissingDatabaseUrl() {
   assert.throws(() => assertDatabaseUrl({ DATABASE_URL: '' }), MissingDatabaseUrlError);
 }
@@ -177,26 +217,31 @@ async function listFiles(dir) {
   return files;
 }
 
-function invoke(router, url, method = 'GET') {
+function invoke(router, url, method = 'GET', headers = {}) {
   return new Promise((resolve) => {
     const chunks = [];
     const response = {
       statusCode: 0,
+      headers: {},
+      setHeader(name, value) {
+        this.headers[name] = value;
+      },
       writeHead(statusCode, headers) {
         this.statusCode = statusCode;
-        this.headers = headers;
+        this.headers = { ...this.headers, ...headers };
       },
       end(chunk) {
         if (chunk) {
           chunks.push(Buffer.from(chunk));
         }
+        const rawBody = Buffer.concat(chunks).toString('utf8');
         resolve({
           statusCode: this.statusCode,
           headers: this.headers,
-          body: JSON.parse(Buffer.concat(chunks).toString('utf8')),
+          body: rawBody ? JSON.parse(rawBody) : null,
         });
       },
     };
-    router({ method, url }, response);
+    router({ method, url, headers }, response);
   });
 }

@@ -1,3 +1,4 @@
+import { addWorkorderOperationalPredicates } from './maintenanceWorkorderRepository.mjs';
 import { addDateWindow, buildWhereClause, listResult, parsePagination } from './queryHelpers.mjs';
 
 const MTBF_FILTERS = {
@@ -129,10 +130,11 @@ function buildDashboardWorkorderSql(filters = {}) {
     site: { column: 'site' },
     department: { column: 'department' },
     equipment_no: { column: 'equipment_no' },
-    status: { column: 'status' },
-    job_type: { column: 'job_type' },
+    status: { column: 'status', operator: 'lower' },
+    job_type: { column: 'job_type', operator: 'lower' },
   });
   const predicates = whereSql ? [whereSql.replace(/^WHERE /, '')] : [];
+  addWorkorderOperationalPredicates(predicates, values, filters);
   addDateWindow(predicates, values, 'coalesce(act_work_start, plan_start)', filters.from, filters.to);
   const finalWhere = predicates.length ? `WHERE ${predicates.join(' AND ')}` : '';
 

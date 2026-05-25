@@ -1,4 +1,4 @@
-import { agenticCoreClient } from '../shared/api/agenticCoreClient';
+import { MAINTENANCE_API_BASE_URL } from '../shared/config/env';
 import type {
   MaintenanceApiResponse,
   MaintenanceDashboardSummary,
@@ -15,6 +15,7 @@ type QueryValue = string | number | boolean | string[] | undefined;
 type RawRecord = Record<string, unknown>;
 
 const MAINTENANCE_ENDPOINTS = {
+  health: '/api/health',
   workorders: '/api/maintenance/workorders',
   workorderDetail: (workorderNo: string) => `/api/maintenance/workorders/${encodeURIComponent(workorderNo)}`,
   equipmentHistory: (equipmentNo: string) => `/api/maintenance/equipment/${encodeURIComponent(equipmentNo)}/history`,
@@ -25,6 +26,10 @@ const MAINTENANCE_ENDPOINTS = {
   stockRisk: '/api/maintenance/analytics/stock-risk',
   dashboardSummary: '/api/maintenance/dashboard-summary',
 } as const;
+
+export function getMaintenanceApiHealth(): Promise<unknown> {
+  return maintenanceRuntimeGet(MAINTENANCE_ENDPOINTS.health);
+}
 
 export function getWorkorderTracking(filters: MaintenanceQueryFilters = {}): Promise<MaintenanceApiResponse<MaintenanceWorkOrder[]>> {
   return getNormalizedList(MAINTENANCE_ENDPOINTS.workorders, filters, normalizeWorkOrder);
@@ -65,7 +70,7 @@ export function getStockRiskSummary(filters: MaintenanceQueryFilters = {}): Prom
 }
 
 export async function getMaintenanceDashboardSummary(filters: MaintenanceQueryFilters = {}): Promise<MaintenanceApiResponse<MaintenanceDashboardSummary>> {
-  const response = await agenticCoreClient.get<unknown>(MAINTENANCE_ENDPOINTS.dashboardSummary, toQueryParams(filters));
+  const response = await maintenanceRuntimeGet<unknown>(MAINTENANCE_ENDPOINTS.dashboardSummary, toQueryParams(filters));
   return normalizeApiResponse(response, normalizeDashboardSummary);
 }
 
@@ -74,7 +79,7 @@ async function getNormalizedList<T>(
   filters: MaintenanceQueryFilters | undefined,
   normalizeItem: (item: RawRecord) => T,
 ): Promise<MaintenanceApiResponse<T[]>> {
-  const response = await agenticCoreClient.get<unknown>(path, toQueryParams(filters));
+  const response = await maintenanceRuntimeGet<unknown>(path, toQueryParams(filters));
   return normalizeApiResponse(response, (value) => toArray(value).map((item) => normalizeItem(toRecord(item))));
 }
 
@@ -83,8 +88,62 @@ async function getNormalizedItem<T>(
   filters: MaintenanceQueryFilters | undefined,
   normalizeItem: (item: RawRecord) => T,
 ): Promise<MaintenanceApiResponse<T>> {
-  const response = await agenticCoreClient.get<unknown>(path, toQueryParams(filters));
+  const response = await maintenanceRuntimeGet<unknown>(path, toQueryParams(filters));
   return normalizeApiResponse(response, (value) => normalizeItem(toRecord(value)));
+}
+
+export function getMaintenanceRuntimeApiBaseUrl(): string {
+  return MAINTENANCE_API_BASE_URL.trim().replace(/\/+$/, '');
+}
+
+export function buildMaintenanceRuntimeUrl(path: string, params?: Record<string, QueryValue>): string {
+  const url = new URL(`${getMaintenanceRuntimeApiBaseUrl()}${normalizePath(path)}`);
+
+  Object.entries(params ?? {}).forEach(([key, value]) => {
+    if (value === undefined) {
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      value.forEach((item) => {
+        url.searchParams.append(key, item);
+      });
+      return;
+    }
+
+    url.searchParams.set(key, String(value));
+  });
+
+  return url.toString();
+}
+
+async function maintenanceRuntimeGet<T>(path: string, params?: Record<string, QueryValue>): Promise<T> {
+  const url = buildMaintenanceRuntimeUrl(path, params);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? ` ${error.message}` : '';
+    throw new Error(`Maintenance API unavailable at ${getMaintenanceRuntimeApiBaseUrl()}.${detail}`);
+  }
+
+  if (response.ok) {
+    return response.json() as Promise<T>;
+  }
+
+  const responseBody = await response.text();
+  const detail = responseBody ? `: ${responseBody}` : '';
+  throw new Error(`Maintenance API request failed with ${response.status} ${response.statusText}${detail}`);
+}
+
+function normalizePath(path: string): string {
+  return path.startsWith('/') ? path : `/${path}`;
 }
 
 export function toMaintenanceQueryParams(filters: MaintenanceQueryFilters = {}): Record<string, QueryValue> {
