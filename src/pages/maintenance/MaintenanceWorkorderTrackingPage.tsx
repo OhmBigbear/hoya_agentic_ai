@@ -6,8 +6,6 @@ import {
   BarChart3,
   Bot,
   CheckCircle,
-  ChevronDown,
-  ChevronRight,
   Clock,
   History,
   Package,
@@ -55,6 +53,7 @@ import type {
   MaintenanceRiskMachine,
   MaintenanceWorkOrder,
   MaintenanceWorkOrderDetail,
+  MaintenanceQueryFilters,
 } from '../../types/maintenance';
 
 interface MaintenanceWorkorderTrackingPageProps {
@@ -75,6 +74,28 @@ interface ChatMessage {
   content: string;
   timestamp: string;
 }
+
+export interface WorkorderFilters {
+  search: string;
+  status: string;
+  machine: string;
+  workType: string;
+  priority: string;
+  overdueOnly: boolean;
+  waitingPartsOnly: boolean;
+}
+
+const defaultFilters: WorkorderFilters = {
+  search: '',
+  status: '',
+  machine: '',
+  workType: '',
+  priority: '',
+  overdueOnly: false,
+  waitingPartsOnly: false,
+};
+
+const pageSize = 12;
 
 const emptySummary: MaintenanceDashboardSummary = {
   open_workorder_count: 0,
@@ -99,7 +120,11 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed }: Maintenan
   const [stockRisk, setStockRisk] = useState<MaintenanceRiskMachine[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [expandedRow, setExpandedRow] = useState<string | null>(null);
+  const [filters, setFilters] = useState<WorkorderFilters>(defaultFilters);
+  const [debouncedFilters, setDebouncedFilters] = useState<WorkorderFilters>(defaultFilters);
+  const [page, setPage] = useState(0);
+  const [totalWorkorders, setTotalWorkorders] = useState(0);
+  const [selectedWorkorderNo, setSelectedWorkorderNo] = useState<string | null>(null);
   const [detailState, setDetailState] = useState<Record<string, DetailState>>({});
   const [isCopilotOpen, setIsCopilotOpen] = useState(false);
   const [inputMessage, setInputMessage] = useState('');
@@ -114,18 +139,29 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed }: Maintenan
   ]);
 
   useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedFilters(filters);
+      setPage(0);
+    }, 300);
+
+    return () => window.clearTimeout(timer);
+  }, [filters]);
+
+  useEffect(() => {
     let cancelled = false;
 
     async function loadPageData() {
       setLoading(true);
       setError(null);
+      const query = buildWorkorderQuery(debouncedFilters, page);
+      const summaryQuery = buildWorkorderQuery(debouncedFilters);
 
       try {
         const [workordersResult, summaryResult, holdsResult, repeatsResult, stockResult] = await Promise.allSettled([
-          getWorkorderTracking({ limit: 100 }),
-          getMaintenanceDashboardSummary(),
-          getHoldReasonSummary({ limit: 10 }),
-          getRepeatFailureCandidates({ limit: 10 }),
+          getWorkorderTracking(query),
+          getMaintenanceDashboardSummary(summaryQuery),
+          getHoldReasonSummary({ limit: 10, department: summaryQuery.department }),
+          getRepeatFailureCandidates({ limit: 10, equipment_no: summaryQuery.equipment_no }),
           getStockRiskSummary({ limit: 10 }),
         ]);
 
@@ -139,8 +175,10 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed }: Maintenan
 
         if (workordersResult.status === 'fulfilled') {
           setWorkorders(workordersResult.value.data);
+          setTotalWorkorders(workordersResult.value.total ?? workordersResult.value.data.length);
         } else {
           setWorkorders([]);
+          setTotalWorkorders(0);
         }
 
         if (summaryResult.status === 'fulfilled') {
@@ -152,7 +190,7 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed }: Maintenan
         setHoldReasons(holdsResult.status === 'fulfilled' ? holdsResult.value.data : []);
         setRepeatFailures(repeatsResult.status === 'fulfilled' ? repeatsResult.value.data : []);
         setStockRisk(stockResult.status === 'fulfilled' ? stockResult.value.data : []);
-        setError(failures.length ? failures.join(' ') : null);
+        setError(buildMaintenanceApiErrorMessage(failures, 5));
       } finally {
         if (!cancelled) {
           setLoading(false);
@@ -165,19 +203,34 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed }: Maintenan
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [debouncedFilters, page]);
 
   const kpis = useMemo(() => buildKpis(summary, workorders, stockRisk), [summary, workorders, stockRisk]);
   const mttrTrend = useMemo(() => buildMttrTrend(summary), [summary]);
   const frequencyData = useMemo(() => buildFrequencyData(workorders, repeatFailures), [workorders, repeatFailures]);
-  const selectedWorkorder = expandedRow ? workorders.find((workorder) => workorder.workorder_no === expandedRow) : undefined;
+  const selectedWorkorder = selectedWorkorderNo ? workorders.find((workorder) => workorder.workorder_no === selectedWorkorderNo) || detailState[selectedWorkorderNo]?.detail : undefined;
+  const totalPages = Math.max(1, Math.ceil(totalWorkorders / pageSize));
 
-  const toggleRowExpansion = async (workorder: MaintenanceWorkOrder) => {
+  useEffect(() => {
+    if (!selectedWorkorderNo) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSelectedWorkorderNo(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedWorkorderNo]);
+
+  const openWorkorderDrawer = async (workorder: MaintenanceWorkOrder) => {
     const workorderNo = workorder.workorder_no;
-    const nextExpandedRow = expandedRow === workorderNo ? null : workorderNo;
-    setExpandedRow(nextExpandedRow);
+    setSelectedWorkorderNo(workorderNo);
 
-    if (!nextExpandedRow || detailState[workorderNo]?.detail || detailState[workorderNo]?.loading) {
+    if (detailState[workorderNo]?.detail || detailState[workorderNo]?.loading) {
       return;
     }
 
@@ -247,7 +300,7 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed }: Maintenan
 
             {error && (
               <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
-                Some maintenance data could not be loaded. Showing available API results. {error}
+                {error}
               </div>
             )}
 
@@ -256,9 +309,13 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed }: Maintenan
             <MaintenanceWorkorderTable
               workorders={workorders}
               loading={loading}
-              expandedRow={expandedRow}
-              detailState={detailState}
-              onToggleRow={toggleRowExpansion}
+              filters={filters}
+              total={totalWorkorders}
+              page={page}
+              totalPages={totalPages}
+              onFiltersChange={setFilters}
+              onPageChange={setPage}
+              onOpenWorkorder={openWorkorderDrawer}
             />
 
             <MaintenanceAnalyticsSection
@@ -281,9 +338,28 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed }: Maintenan
           summary={summary}
           selectedWorkorder={selectedWorkorder}
         />
+
+        <WorkorderDetailDrawer
+          workorder={selectedWorkorder}
+          detail={selectedWorkorderNo ? detailState[selectedWorkorderNo] : undefined}
+          isOpen={Boolean(selectedWorkorderNo)}
+          onClose={() => setSelectedWorkorderNo(null)}
+        />
       </div>
     </main>
   );
+}
+
+export function buildMaintenanceApiErrorMessage(failures: string[], requestCount: number): string | null {
+  if (failures.length === 0) {
+    return null;
+  }
+
+  if (failures.length >= requestCount) {
+    return `Maintenance API unavailable. Start the Maintenance Runtime API or check VITE_MAINTENANCE_API_BASE_URL. ${failures.join(' ')}`;
+  }
+
+  return `Some maintenance data could not be loaded. Showing available API results. ${failures.join(' ')}`;
 }
 
 export function MaintenanceKpiCards({ loading, kpis }: { loading: boolean; kpis: ReturnType<typeof buildKpis> }) {
@@ -320,32 +396,100 @@ export function MaintenanceKpiCards({ loading, kpis }: { loading: boolean; kpis:
 export function MaintenanceWorkorderTable({
   workorders,
   loading,
-  expandedRow,
-  detailState,
-  onToggleRow,
+  filters = defaultFilters,
+  total = workorders.length,
+  page = 0,
+  totalPages = Math.max(1, Math.ceil(workorders.length / pageSize)),
+  onFiltersChange = () => {},
+  onPageChange = () => {},
+  onOpenWorkorder = () => {},
 }: {
   workorders: MaintenanceWorkOrder[];
   loading: boolean;
-  expandedRow: string | null;
-  detailState: Record<string, DetailState>;
-  onToggleRow: (workorder: MaintenanceWorkOrder) => void;
+  filters?: WorkorderFilters;
+  total?: number;
+  page?: number;
+  totalPages?: number;
+  onFiltersChange?: (filters: WorkorderFilters) => void;
+  onPageChange?: (page: number) => void;
+  onOpenWorkorder?: (workorder: MaintenanceWorkOrder) => void;
 }) {
+  const updateFilter = (key: keyof WorkorderFilters, value: string | boolean) => {
+    onFiltersChange({ ...filters, [key]: value });
+  };
+
   return (
     <Card className="bg-[#141b2e] border-white/10 mb-6">
-      <CardHeader>
-        <CardTitle className="text-white text-lg flex items-center gap-2">
-          <Wrench className="w-5 h-5 text-cyan-400" />
-          Maintenance Workorder Tracking
-        </CardTitle>
-        <CardDescription className="text-slate-400 text-xs">
-          Open and recent maintenance jobs with API-backed operational context
-        </CardDescription>
+      <CardHeader className="pb-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <CardTitle className="text-white text-lg flex items-center gap-2">
+              <Wrench className="w-5 h-5 text-cyan-400" />
+              Maintenance Workorder Tracking
+            </CardTitle>
+            <CardDescription className="text-slate-400 text-xs mt-1">
+              Open and recent maintenance jobs with API-backed operational context
+            </CardDescription>
+          </div>
+          <div className="text-right text-xs text-slate-400">
+            <div className="text-slate-200 font-medium">{total} matched</div>
+            <div>Showing {workorders.length} rows</div>
+          </div>
+        </div>
       </CardHeader>
       <CardContent>
+        <div className="mb-4 grid grid-cols-1 xl:grid-cols-[1.4fr_0.8fr_0.8fr_0.8fr_0.8fr_auto] gap-2">
+          <Input
+            value={filters.search}
+            onChange={(event) => updateFilter('search', event.target.value)}
+            placeholder="Search workorder, machine, issue"
+            className="h-9 bg-[#0f1623] border-white/10 text-white placeholder:text-slate-500 text-xs"
+            aria-label="Search workorders"
+          />
+          <select value={filters.status} onChange={(event) => updateFilter('status', event.target.value)} className="h-9 rounded-md bg-[#0f1623] border border-white/10 px-3 text-xs text-slate-200">
+            <option value="">All status</option>
+            <option value="open">Open</option>
+            <option value="in_progress">In progress</option>
+            <option value="on_hold">On hold</option>
+            <option value="completed">Completed</option>
+            <option value="closed">Closed</option>
+          </select>
+          <Input
+            value={filters.machine}
+            onChange={(event) => updateFilter('machine', event.target.value)}
+            placeholder="Machine"
+            className="h-9 bg-[#0f1623] border-white/10 text-white placeholder:text-slate-500 text-xs"
+            aria-label="Machine filter"
+          />
+          <select value={filters.workType} onChange={(event) => updateFilter('workType', event.target.value)} className="h-9 rounded-md bg-[#0f1623] border border-white/10 px-3 text-xs text-slate-200">
+            <option value="">All work types</option>
+            <option value="CM">Corrective</option>
+            <option value="PM">Preventive</option>
+            <option value="PDM">Predictive</option>
+          </select>
+          <select value={filters.priority} onChange={(event) => updateFilter('priority', event.target.value)} className="h-9 rounded-md bg-[#0f1623] border border-white/10 px-3 text-xs text-slate-200">
+            <option value="">All priority</option>
+            <option value="Critical">Critical</option>
+            <option value="High">High</option>
+            <option value="Normal">Normal</option>
+            <option value="Low">Low</option>
+          </select>
+          <div className="flex items-center gap-3 rounded-md border border-white/10 bg-[#0f1623] px-3 h-9">
+            <label className="flex items-center gap-2 text-xs text-slate-300 whitespace-nowrap">
+              <input type="checkbox" checked={filters.overdueOnly} onChange={(event) => updateFilter('overdueOnly', event.target.checked)} className="accent-cyan-500" />
+              Overdue
+            </label>
+            <label className="flex items-center gap-2 text-xs text-slate-300 whitespace-nowrap">
+              <input type="checkbox" checked={filters.waitingPartsOnly} onChange={(event) => updateFilter('waitingPartsOnly', event.target.checked)} className="accent-cyan-500" />
+              Parts
+            </label>
+          </div>
+        </div>
+
         {loading ? (
           <div className="space-y-2">
-            {[0, 1, 2].map((index) => (
-              <div key={index} className="h-12 rounded bg-[#1e293b] border border-white/5 animate-pulse" />
+            {[0, 1, 2, 3, 4, 5].map((index) => (
+              <div key={index} className="h-11 rounded bg-[#1e293b] border border-white/5 animate-pulse" />
             ))}
           </div>
         ) : workorders.length === 0 ? (
@@ -354,37 +498,31 @@ export function MaintenanceWorkorderTable({
             <p className="mt-1 text-xs text-slate-400">The runtime API responded successfully but no rows matched the current query.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="max-h-[640px] overflow-auto border border-white/10 rounded-lg">
             <table className="w-full">
-              <thead>
+              <thead className="sticky top-0 z-10 bg-[#141b2e]">
                 <tr className="border-b border-white/10">
-                  <th className="text-left text-xs font-medium text-slate-400 uppercase pb-3 pr-4"></th>
-                  <th className="text-left text-xs font-medium text-slate-400 uppercase pb-3 pr-4">Workorder No</th>
-                  <th className="text-left text-xs font-medium text-slate-400 uppercase pb-3 pr-4">Machine</th>
-                  <th className="text-left text-xs font-medium text-slate-400 uppercase pb-3 pr-4">Work Type</th>
-                  <th className="text-left text-xs font-medium text-slate-400 uppercase pb-3 pr-4">Status</th>
-                  <th className="text-left text-xs font-medium text-slate-400 uppercase pb-3 pr-4">Technician</th>
-                  <th className="text-left text-xs font-medium text-slate-400 uppercase pb-3 pr-4">Elapsed</th>
-                  <th className="text-left text-xs font-medium text-slate-400 uppercase pb-3 pr-4">ETA</th>
-                  <th className="text-left text-xs font-medium text-slate-400 uppercase pb-3 pr-4">Parts Status</th>
-                  <th className="text-left text-xs font-medium text-slate-400 uppercase pb-3 pr-4">Priority</th>
-                  <th className="text-left text-xs font-medium text-slate-400 uppercase pb-3 pr-4">Progress</th>
+                  <th className="text-left text-xs font-medium text-slate-400 uppercase py-3 px-3">Workorder</th>
+                  <th className="text-left text-xs font-medium text-slate-400 uppercase py-3 px-3">Machine</th>
+                  <th className="text-left text-xs font-medium text-slate-400 uppercase py-3 px-3">Type</th>
+                  <th className="text-left text-xs font-medium text-slate-400 uppercase py-3 px-3">Status</th>
+                  <th className="text-left text-xs font-medium text-slate-400 uppercase py-3 px-3">Technician</th>
+                  <th className="text-left text-xs font-medium text-slate-400 uppercase py-3 px-3">Elapsed</th>
+                  <th className="text-left text-xs font-medium text-slate-400 uppercase py-3 px-3">ETA</th>
+                  <th className="text-left text-xs font-medium text-slate-400 uppercase py-3 px-3">Parts</th>
+                  <th className="text-left text-xs font-medium text-slate-400 uppercase py-3 px-3">Priority</th>
+                  <th className="text-left text-xs font-medium text-slate-400 uppercase py-3 px-3">Progress</th>
                 </tr>
               </thead>
               <tbody>
                 {workorders.map((workorder) => {
                   const progress = getProgress(workorder);
-                  const isExpanded = expandedRow === workorder.workorder_no;
-                  const detail = detailState[workorder.workorder_no];
-
                   return (
-                    <FragmentRow
+                    <WorkorderTableRow
                       key={workorder.workorder_no}
                       workorder={workorder}
                       progress={progress}
-                      isExpanded={isExpanded}
-                      detail={detail}
-                      onToggleRow={onToggleRow}
+                      onOpenWorkorder={onOpenWorkorder}
                     />
                   );
                 })}
@@ -392,60 +530,65 @@ export function MaintenanceWorkorderTable({
             </table>
           </div>
         )}
+
+        <div className="mt-4 flex items-center justify-between gap-3 text-xs text-slate-400">
+          <span>Page {page + 1} of {totalPages}</span>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" className="h-8 border-white/20 text-slate-300 hover:bg-[#1e293b] hover:text-white" disabled={loading || page === 0} onClick={() => onPageChange(Math.max(0, page - 1))}>
+              Previous
+            </Button>
+            <Button size="sm" variant="outline" className="h-8 border-white/20 text-slate-300 hover:bg-[#1e293b] hover:text-white" disabled={loading || page >= totalPages - 1} onClick={() => onPageChange(page + 1)}>
+              Next
+            </Button>
+          </div>
+        </div>
       </CardContent>
     </Card>
   );
 }
 
-function FragmentRow({
+function WorkorderTableRow({
   workorder,
   progress,
-  isExpanded,
-  detail,
-  onToggleRow,
+  onOpenWorkorder,
 }: {
   workorder: MaintenanceWorkOrder;
   progress: number;
-  isExpanded: boolean;
-  detail?: DetailState;
-  onToggleRow: (workorder: MaintenanceWorkOrder) => void;
+  onOpenWorkorder: (workorder: MaintenanceWorkOrder) => void;
 }) {
   return (
-    <>
-      <tr className="border-b border-white/5 hover:bg-white/5 cursor-pointer" onClick={() => onToggleRow(workorder)}>
-        <td className="py-3 pr-4">
-          {isExpanded ? <ChevronDown className="w-4 h-4 text-slate-400" /> : <ChevronRight className="w-4 h-4 text-slate-400" />}
-        </td>
-        <td className="py-3 pr-4">
+      <tr className="border-b border-white/5 hover:bg-white/5 cursor-pointer" onClick={() => onOpenWorkorder(workorder)} tabIndex={0} onKeyDown={(event) => event.key === 'Enter' && onOpenWorkorder(workorder)}>
+        <td className="py-2.5 px-3 min-w-36">
           <span className="text-sm text-cyan-400 font-medium">{workorder.workorder_no}</span>
+          <p className="text-xs text-slate-500 truncate max-w-48">{truncateText(workorder.failure_description || workorder.reason || 'No issue text', 52)}</p>
         </td>
-        <td className="py-3 pr-4">
+        <td className="py-2.5 px-3 min-w-44">
           <span className="text-sm text-white font-medium">{workorder.equipment_no || 'Unassigned'}</span>
-          <p className="text-xs text-slate-400">{workorder.equipment_desc || workorder.location || 'No machine description'}</p>
+          <p className="text-xs text-slate-400 truncate max-w-52">{truncateText(workorder.equipment_desc || workorder.location || 'No machine description', 48)}</p>
         </td>
-        <td className="py-3 pr-4">
+        <td className="py-2.5 px-3">
           <Badge className="bg-slate-700/50 text-slate-300 border-slate-600/50 text-xs">{formatWorkType(workorder.job_type)}</Badge>
         </td>
-        <td className="py-3 pr-4">
+        <td className="py-2.5 px-3">
           <Badge className={getStatusBadgeClass(workorder.status)}>{formatStatus(workorder.status)}</Badge>
         </td>
-        <td className="py-3 pr-4">
+        <td className="py-2.5 px-3 min-w-36">
           <span className="text-sm text-white">{getTechnician(workorder)}</span>
           <p className="text-xs text-slate-400">{workorder.department || workorder.site || 'Maintenance'}</p>
         </td>
-        <td className="py-3 pr-4">
+        <td className="py-2.5 px-3 whitespace-nowrap">
           <span className="text-sm text-slate-300">{formatHours(workorder.total_repair_time_hours || workorder.down_time_hours)}</span>
         </td>
-        <td className="py-3 pr-4">
+        <td className="py-2.5 px-3 whitespace-nowrap">
           <span className="text-sm text-slate-300">{formatDateTime(workorder.plan_finish)}</span>
         </td>
-        <td className="py-3 pr-4">
+        <td className="py-2.5 px-3">
           <Badge className={getPartsBadgeClass(workorder)}>{getPartsStatus(workorder)}</Badge>
         </td>
-        <td className="py-3 pr-4">
+        <td className="py-2.5 px-3">
           <Badge className={getPriorityBadgeClass(workorder.priority)}>{workorder.priority || 'Normal'}</Badge>
         </td>
-        <td className="py-3 pr-4">
+        <td className="py-2.5 px-3">
           <div className="flex items-center gap-2">
             <div className="h-2 bg-slate-700 rounded-full overflow-hidden w-20">
               <div className={progress >= 100 ? 'h-full bg-green-500' : progress > 50 ? 'h-full bg-blue-500' : 'h-full bg-yellow-500'} style={{ width: `${progress}%` }} />
@@ -454,14 +597,30 @@ function FragmentRow({
           </div>
         </td>
       </tr>
-      {isExpanded && (
-        <tr className="bg-[#1e293b]/30">
-          <td colSpan={11} className="py-4 px-6">
-            <WorkorderDetailPanel workorder={workorder} detail={detail} />
-          </td>
-        </tr>
-      )}
-    </>
+  );
+}
+
+export function WorkorderDetailDrawer({ workorder, detail, isOpen, onClose }: { workorder?: MaintenanceWorkOrder; detail?: DetailState; isOpen: boolean; onClose: () => void }) {
+  return (
+    <div className={`absolute inset-y-0 right-0 z-30 h-full max-h-full w-[34rem] max-w-[calc(100vw-2rem)] overflow-hidden border-l border-white/10 bg-[#0f1623] shadow-2xl shadow-black/40 transition-transform duration-300 ease-out ${isOpen ? 'translate-x-0' : 'translate-x-full pointer-events-none'}`} aria-hidden={!isOpen}>
+      <div className="flex h-full min-h-0 flex-col overflow-hidden">
+        <div className="flex flex-shrink-0 items-start justify-between gap-3 border-b border-white/10 p-4">
+          <div className="min-w-0">
+            <p className="text-xs uppercase text-slate-500">Workorder Detail</p>
+            <h3 className="text-lg font-semibold text-white truncate">{workorder?.workorder_no ?? 'Loading workorder'}</h3>
+            <p className="text-xs text-slate-400 truncate">{workorder?.equipment_no ?? 'Machine pending'} · {formatStatus(workorder?.status)}</p>
+          </div>
+          <Button onClick={onClose} variant="ghost" size="icon" className="h-8 w-8 flex-shrink-0 text-slate-400 hover:bg-[#1e293b] hover:text-white" aria-label="Close workorder detail">
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
+        <ScrollArea className="min-h-0 flex-1 overflow-y-auto" aria-label="Workorder detail content">
+          <div className="p-4">
+            {workorder ? <WorkorderDetailPanel workorder={workorder} detail={detail} /> : <div className="h-32 rounded bg-[#1e293b] border border-white/5 animate-pulse" />}
+          </div>
+        </ScrollArea>
+      </div>
+    </div>
   );
 }
 
@@ -484,10 +643,25 @@ function WorkorderDetailPanel({ workorder, detail }: { workorder: MaintenanceWor
       )}
       <div>
         <h4 className="text-sm font-medium text-white mb-2">Issue Description</h4>
-        <p className="text-sm text-slate-300">{workorder.failure_description || workorder.reason || detailRecord?.action_description || 'No issue description provided by API.'}</p>
+        <p className="text-sm text-slate-300 leading-relaxed">{workorder.failure_description || workorder.reason || detailRecord?.action_description || 'No issue description provided by API.'}</p>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 gap-4">
+        <DetailList
+          title="Workorder Summary"
+          emptyText="No workorder summary returned"
+          rows={[
+            { key: 'status', primary: `${formatStatus(workorder.status)} · ${formatWorkType(workorder.job_type)}`, secondary: `${workorder.priority || 'Normal'} priority · ${formatHours(workorder.total_repair_time_hours || workorder.down_time_hours)} elapsed` },
+            { key: 'window', primary: `ETA ${formatDateTime(workorder.plan_finish)}`, secondary: `Started ${formatDateTime(workorder.act_work_start)} · Finished ${formatDateTime(workorder.act_work_end)}` },
+          ]}
+        />
+        <DetailList
+          title="Technician Info"
+          emptyText="No technician data returned"
+          rows={[
+            { key: 'technician', primary: getTechnician(workorder), secondary: workorder.department || workorder.site || detailRecord?.equipment?.department || 'Maintenance team' },
+          ]}
+        />
         <MaintenanceTimeline items={timelineItems} />
         <DetailList
           title="Parts Usage"
@@ -513,6 +687,14 @@ function WorkorderDetailPanel({ workorder, detail }: { workorder: MaintenanceWor
           rows={[
             { key: 'downtime', primary: `${formatHours(workorder.down_time_hours)} downtime`, secondary: workorder.solution || 'No corrective action recorded' },
             { key: 'tasks', primary: `${detailRecord?.tasks?.length ?? workorder.task_count ?? 0} task records`, secondary: `${workorder.part_transaction_count ?? 0} part transactions` },
+          ]}
+        />
+        <DetailList
+          title="Operational Notes"
+          emptyText="No operational notes returned"
+          rows={[
+            { key: 'action', primary: 'Action', secondary: workorder.action_description || detailRecord?.action_description || 'No action notes recorded' },
+            { key: 'solution', primary: 'Solution', secondary: workorder.solution || 'No solution recorded' },
           ]}
         />
       </div>
@@ -585,7 +767,7 @@ export function MaintenanceAnalyticsSection({
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-      <Card className="bg-[#141b2e] border-white/10">
+      <Card className="bg-[#141b2e] border-white/10 lg:col-span-2">
         <CardHeader>
           <CardTitle className="text-white text-lg flex items-center gap-2">
             <Timer className="w-5 h-5 text-cyan-400" />
@@ -595,7 +777,7 @@ export function MaintenanceAnalyticsSection({
         </CardHeader>
         <CardContent>
           {loading ? <ChartLoading /> : mttrTrend.length === 0 ? <EmptyAnalytics text="No MTTR rows returned" /> : (
-            <ResponsiveContainer width="100%" height={220}>
+            <ResponsiveContainer width="100%" height={200}>
               <AreaChart data={mttrTrend}>
                 <defs>
                   <linearGradient id="mttrGradient" x1="0" y1="0" x2="0" y2="1">
@@ -660,7 +842,7 @@ export function MaintenanceAnalyticsSection({
         </CardHeader>
         <CardContent>
           {loading ? <ChartLoading /> : frequencyData.length === 0 ? <EmptyAnalytics text="No machine frequency data returned" /> : (
-            <ResponsiveContainer width="100%" height={220}>
+            <ResponsiveContainer width="100%" height={200}>
               <BarChart data={frequencyData} layout="vertical">
                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
                 <XAxis type="number" stroke="#94a3b8" style={{ fontSize: '11px' }} />
@@ -840,24 +1022,24 @@ const tooltipStyle = {
 };
 
 function ChartLoading() {
-  return <div className="h-[220px] rounded bg-[#1e293b] border border-white/5 animate-pulse" />;
+  return <div className="h-[200px] rounded bg-[#1e293b] border border-white/5 animate-pulse" />;
 }
 
 function EmptyAnalytics({ text }: { text: string }) {
-  return <div className="h-[220px] rounded border border-white/10 bg-[#1e293b] flex items-center justify-center text-sm text-slate-400">{text}</div>;
+  return <div className="h-[200px] rounded border border-white/10 bg-[#1e293b] flex items-center justify-center text-sm text-slate-400">{text}</div>;
 }
 
 export function buildKpis(summary: MaintenanceDashboardSummary, workorders: MaintenanceWorkOrder[], stockRisk: MaintenanceRiskMachine[]) {
   const inProgress = workorders.filter((workorder) => isInProgress(workorder.status)).length;
-  const waitingParts = Math.max(summary.on_hold_workorder_count, stockRisk.filter((item) => item.stock_risk && item.stock_risk !== 'ok').length);
+  const waitingParts = summary.on_hold_workorder_count;
   const avgMttr = average(summary.mtbf_mttr.map((row) => row.mttr_hours).filter(isNumber));
 
   return [
     {
       label: 'Open Workorders',
       value: summary.open_workorder_count,
-      caption: 'Active jobs',
-      detail: `${summary.completed_workorder_count} completed`,
+      caption: 'Open, active, or on hold',
+      detail: `${summary.completed_workorder_count} closed`,
       icon: Wrench,
       detailIcon: CheckCircle,
       className: 'from-purple-900/40 to-purple-950/40 border-purple-800/30',
@@ -870,7 +1052,7 @@ export function buildKpis(summary: MaintenanceDashboardSummary, workorders: Main
       label: 'In Progress',
       value: inProgress,
       caption: 'Active repairs',
-      detail: `${workorders.length} API rows`,
+      detail: `${workorders.length} rows visible`,
       icon: Activity,
       detailIcon: Activity,
       className: 'from-blue-900/40 to-blue-950/40 border-blue-800/30',
@@ -908,7 +1090,7 @@ export function buildKpis(summary: MaintenanceDashboardSummary, workorders: Main
     {
       label: 'Waiting Parts',
       value: waitingParts,
-      caption: 'Blocked or at risk',
+      caption: 'On hold / parts wait',
       detail: `${summary.stock_risk_item_count} stock risks`,
       icon: Package,
       detailIcon: Package,
@@ -919,6 +1101,24 @@ export function buildKpis(summary: MaintenanceDashboardSummary, workorders: Main
       detailClassName: 'text-orange-400',
     },
   ];
+}
+
+export function buildWorkorderQuery(filters: WorkorderFilters, page = 0): MaintenanceQueryFilters {
+  return {
+    q: filters.search.trim() || undefined,
+    status: filters.status || undefined,
+    equipment_no: filters.machine.trim() || undefined,
+    job_type: filters.workType || undefined,
+    priority: filters.priority || undefined,
+    overdue: filters.overdueOnly || undefined,
+    waiting_parts: filters.waitingPartsOnly || undefined,
+    limit: pageSize,
+    offset: page * pageSize,
+  };
+}
+
+function truncateText(value: string, maxLength: number) {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}...` : value;
 }
 
 export function buildMttrTrend(summary: MaintenanceDashboardSummary) {

@@ -3,8 +3,9 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createServer } from 'vite';
 
-process.env.VITE_APP_MODE = 'production';
+process.env.VITE_APP_MODE = 'mock';
 process.env.VITE_AGENTIC_CORE_API_BASE_URL = 'http://agentic-core.test';
+process.env.VITE_MAINTENANCE_API_BASE_URL = 'http://maintenance-runtime.test';
 
 const server = await createServer({
   appType: 'custom',
@@ -61,7 +62,118 @@ try {
   const tableMarkup = renderToStaticMarkup(React.createElement(page.MaintenanceWorkorderTable, {
     workorders,
     loading: false,
-    expandedRow: 'MWO-REAL-001',
+    filters: {
+      search: 'spindle',
+      status: 'in_progress',
+      machine: 'CURVE-GEN-3B',
+      workType: 'CM',
+      priority: 'Critical',
+      overdueOnly: true,
+      waitingPartsOnly: false,
+    },
+    total: 24,
+    page: 1,
+    totalPages: 2,
+    onFiltersChange: () => {},
+    onPageChange: () => {},
+    onOpenWorkorder: () => {},
+  }));
+  assert.match(tableMarkup, /MWO-REAL-001/);
+  assert.match(tableMarkup, /Curve generator spindle/);
+  assert.match(tableMarkup, /Search workorder, machine, issue/);
+  assert.match(tableMarkup, /24 matched/);
+  assert.match(tableMarkup, /Showing 1 rows/);
+  assert.match(tableMarkup, /Page 2 of 2/);
+  assert.match(tableMarkup, /Overdue/);
+
+  const drawerMarkup = renderToStaticMarkup(React.createElement(page.WorkorderDetailDrawer, {
+    workorder: workorders[0],
+    isOpen: true,
+    detail: {
+      detail: {
+        ...workorders[0],
+        equipment: { equipment_no: 'CURVE-GEN-3B', equipment_desc: 'Curve generator spindle' },
+        tasks: [{ task_no: '10', description_1: 'Inspect spindle' }],
+        parts: [],
+        hold_history: [],
+      },
+      history: [
+        { ...workorders[0], workorder_no: 'MWO-REAL-000', status: 'completed' },
+        { ...workorders[0], workorder_no: 'MWO-REAL-099', status: 'completed' },
+      ],
+      parts: [
+        { workorder_no: 'MWO-REAL-001', catalogue_no: 'BRG-01', part_name: 'Bearing', issued_qty: 1, movement_qty: 1, transaction_count: 1 },
+        { workorder_no: 'MWO-REAL-001', catalogue_no: 'BELT-99', part_name: 'Drive belt', issued_qty: 2, movement_qty: 2, transaction_count: 1 },
+      ],
+      loading: false,
+    },
+    onClose: () => {},
+  }));
+  assert.match(drawerMarkup, /Workorder Detail/);
+  assert.match(drawerMarkup, /h-full max-h-full/);
+  assert.match(drawerMarkup, /overflow-hidden/);
+  assert.match(drawerMarkup, /min-h-0 flex-1 overflow-y-auto/);
+  assert.match(drawerMarkup, /aria-label="Workorder detail content"/);
+  assert.match(drawerMarkup, /Issue Description/);
+  assert.match(drawerMarkup, /Workorder Summary/);
+  assert.match(drawerMarkup, /Technician Info/);
+  assert.match(drawerMarkup, /Parts Usage/);
+  assert.match(drawerMarkup, /Drive belt/);
+  assert.match(drawerMarkup, /Maintenance History/);
+  assert.match(drawerMarkup, /MWO-REAL-099/);
+  assert.match(drawerMarkup, /Downtime Context/);
+  assert.match(drawerMarkup, /Operational Notes/);
+  assert.match(drawerMarkup, /Close workorder detail/);
+
+  const loadingDrawerMarkup = renderToStaticMarkup(React.createElement(page.WorkorderDetailDrawer, {
+    workorder: workorders[0],
+    isOpen: true,
+    detail: {
+      history: [],
+      parts: [],
+      loading: true,
+    },
+    onClose: () => {},
+  }));
+  assert.match(loadingDrawerMarkup, /Loading workorder details/);
+
+  const queryParams = page.buildWorkorderQuery({
+    search: 'spindle',
+    status: 'in_progress',
+    machine: 'CURVE-GEN-3B',
+    workType: 'CM',
+    priority: 'Critical',
+    overdueOnly: true,
+    waitingPartsOnly: true,
+  }, 2);
+  assert.deepEqual(queryParams, {
+    q: 'spindle',
+    status: 'in_progress',
+    equipment_no: 'CURVE-GEN-3B',
+    job_type: 'CM',
+    priority: 'Critical',
+    overdue: true,
+    waiting_parts: true,
+    limit: 12,
+    offset: 24,
+  });
+
+  const partialDrawerMarkup = renderToStaticMarkup(React.createElement(page.WorkorderDetailDrawer, {
+    workorder: { ...workorders[0], failure_description: undefined, reason: undefined, action_description: undefined },
+    isOpen: true,
+    detail: {
+      detail: undefined,
+      history: [],
+      parts: [],
+      loading: false,
+    },
+    onClose: () => {},
+  }));
+  assert.match(partialDrawerMarkup, /No issue description provided by API/);
+
+  const oldShapeTableMarkup = renderToStaticMarkup(React.createElement(page.MaintenanceWorkorderTable, {
+    workorders,
+    loading: false,
     detailState: {
       'MWO-REAL-001': {
         detail: {
@@ -76,21 +188,12 @@ try {
         loading: false,
       },
     },
-    onToggleRow: () => {},
   }));
-  assert.match(tableMarkup, /MWO-REAL-001/);
-  assert.match(tableMarkup, /Curve generator spindle/);
-  assert.match(tableMarkup, /Issue Description/);
-  assert.match(tableMarkup, /Parts Usage/);
-  assert.match(tableMarkup, /Maintenance History/);
-  assert.match(tableMarkup, /Downtime Context/);
+  assert.match(oldShapeTableMarkup, /MWO-REAL-001/);
 
   const emptyTableMarkup = renderToStaticMarkup(React.createElement(page.MaintenanceWorkorderTable, {
     workorders: [],
     loading: false,
-    expandedRow: null,
-    detailState: {},
-    onToggleRow: () => {},
   }));
   assert.match(emptyTableMarkup, /No maintenance workorders returned/);
 
@@ -112,6 +215,15 @@ try {
   assert.equal(partialKpis[2].value, 'N/A');
   assert.deepEqual(page.buildMttrTrend({ ...summary, mtbf_mttr: [] }), []);
   assert.deepEqual(page.buildFrequencyData([], []), []);
+
+  const unavailableMessage = page.buildMaintenanceApiErrorMessage([
+    'Maintenance API unavailable at http://maintenance-runtime.test. fetch failed',
+    'Maintenance API unavailable at http://maintenance-runtime.test. fetch failed',
+  ], 2);
+  assert.match(unavailableMessage, /Maintenance API unavailable/);
+  assert.match(unavailableMessage, /VITE_MAINTENANCE_API_BASE_URL/);
+  assert.doesNotMatch(unavailableMessage, /Agentic Core API client/);
+  assert.doesNotMatch(unavailableMessage, /APP_MODE/);
 } finally {
   await server.close();
 }
