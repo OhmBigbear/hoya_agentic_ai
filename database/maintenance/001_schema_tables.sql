@@ -20,24 +20,43 @@ IMMUTABLE
 AS $$
 DECLARE
   cleaned text := NULLIF(TRIM(value), '');
+  match text[];
+  parsed_year integer;
+  parsed timestamp without time zone;
 BEGIN
   IF cleaned IS NULL THEN
     RETURN NULL;
   END IF;
 
   BEGIN
-    IF cleaned ~ '^\d{1,2}/\d{1,2}/\d{2}\s+\d{1,2}:\d{2}:\d{2}$' THEN
-      RETURN to_timestamp(cleaned, 'DD/MM/YY HH24:MI:SS')::timestamp;
-    ELSIF cleaned ~ '^\d{1,2}/\d{1,2}/\d{2}\s+\d{1,2}:\d{2}$' THEN
-      RETURN to_timestamp(cleaned, 'DD/MM/YY HH24:MI')::timestamp;
-    ELSIF cleaned ~ '^\d{1,2}/\d{1,2}/\d{4}\s+\d{1,2}:\d{2}:\d{2}$' THEN
-      RETURN to_timestamp(cleaned, 'DD/MM/YYYY HH24:MI:SS')::timestamp;
-    ELSIF cleaned ~ '^\d{1,2}/\d{1,2}/\d{4}\s+\d{1,2}:\d{2}(:\d{2})?$' THEN
-      RETURN to_timestamp(cleaned, 'DD/MM/YYYY HH24:MI')::timestamp;
-    ELSIF cleaned ~ '^\d{1,2}/\d{1,2}/\d{2}$' THEN
-      RETURN to_timestamp(cleaned, 'DD/MM/YY')::timestamp;
-    ELSIF cleaned ~ '^\d{1,2}/\d{1,2}/\d{4}$' THEN
-      RETURN to_timestamp(cleaned, 'DD/MM/YYYY')::timestamp;
+    match := regexp_match(cleaned, '^(\d{1,2})/(\d{1,2})/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$');
+    IF match IS NULL THEN
+      match := regexp_match(cleaned, '^(\d{1,2})/(\d{1,2})/(\d{2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$');
+      IF match IS NULL THEN
+        RETURN NULL;
+      END IF;
+      parsed_year := CASE WHEN match[3]::integer <= 69 THEN 2000 + match[3]::integer ELSE 1900 + match[3]::integer END;
+    ELSE
+      parsed_year := match[3]::integer;
+    END IF;
+
+    parsed := make_timestamp(
+      parsed_year,
+      match[2]::integer,
+      match[1]::integer,
+      coalesce(match[4]::integer, 0),
+      coalesce(match[5]::integer, 0),
+      coalesce(match[6]::double precision, 0)
+    );
+
+    IF extract(year FROM parsed)::integer = parsed_year
+      AND extract(month FROM parsed)::integer = match[2]::integer
+      AND extract(day FROM parsed)::integer = match[1]::integer
+      AND extract(hour FROM parsed)::integer = coalesce(match[4]::integer, 0)
+      AND extract(minute FROM parsed)::integer = coalesce(match[5]::integer, 0)
+      AND floor(extract(second FROM parsed))::integer = coalesce(match[6]::integer, 0)
+    THEN
+      RETURN parsed;
     END IF;
   EXCEPTION WHEN others THEN
     RETURN NULL;

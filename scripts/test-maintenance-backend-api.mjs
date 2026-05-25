@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+import { getJson, usageText as apiSmokeUsageText } from './maintenance/smoke-maintenance-api.mjs';
+import { requireDatabaseUrl as requireSmokeDatabaseUrl, usageText as dataSmokeUsageText } from './maintenance/smoke-maintenance-real-data.mjs';
 import { assertDatabaseUrl, MissingDatabaseUrlError } from '../src/server/db/postgres.mjs';
 import { buildHoldReasonsQuery, buildMtbfMttrQuery } from '../src/server/maintenance/repositories/maintenanceAnalyticsRepository.mjs';
 import { buildStockRiskQuery } from '../src/server/maintenance/repositories/maintenanceInventoryRepository.mjs';
@@ -14,6 +17,8 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 testQueryBuilders();
 await testRoutes();
 await testNoStagingRuntimeReferences();
+await testSmokeScriptHelpAndFailureModes();
+testNoCommittedUploads();
 testMissingDatabaseUrl();
 
 console.log('Maintenance backend API tests passed.');
@@ -131,6 +136,22 @@ async function testRoutes() {
 
 function testMissingDatabaseUrl() {
   assert.throws(() => assertDatabaseUrl({ DATABASE_URL: '' }), MissingDatabaseUrlError);
+}
+
+async function testSmokeScriptHelpAndFailureModes() {
+  assert.match(dataSmokeUsageText(), /Usage:/);
+  assert.match(apiSmokeUsageText(), /Usage:/);
+  assert.throws(() => requireSmokeDatabaseUrl({ DATABASE_URL: '' }), /DATABASE_URL is required/);
+  await assert.rejects(() => getJson('http://127.0.0.1:1', '/api/health'), /Request failed/);
+}
+
+function testNoCommittedUploads() {
+  const result = spawnSync('git', ['ls-files', 'uploads'], {
+    cwd: rootDir,
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), '', 'Raw uploads must not be tracked by git.');
 }
 
 async function testNoStagingRuntimeReferences() {

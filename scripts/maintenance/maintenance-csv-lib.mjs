@@ -417,6 +417,30 @@ export async function runPsqlSql(sql) {
   });
 }
 
+export async function runPsqlRows(sql, values = []) {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    throw new Error('DATABASE_URL is required for database operations.');
+  }
+
+  const { Pool } = await import('pg');
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    max: 1,
+    connectionTimeoutMillis: Number(process.env.PG_CONNECTION_TIMEOUT_MS ?? 5000),
+    query_timeout: Number(process.env.PG_QUERY_TIMEOUT_MS ?? 15000),
+    statement_timeout: Number(process.env.PG_STATEMENT_TIMEOUT_MS ?? 15000),
+    application_name: 'hoya-ui-maintenance-smoke',
+  });
+
+  try {
+    const result = await pool.query(sql, values);
+    return result.rows;
+  } finally {
+    await pool.end();
+  }
+}
+
 export async function copyRowsToTable({ table, columns, rows }) {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {

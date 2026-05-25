@@ -10,6 +10,8 @@
     "maintenance:db:rebuild": "node scripts/maintenance/rebuild-maintenance-db.mjs",
     "maintenance:import": "node scripts/maintenance/import-maintenance-staging.mjs",
     "maintenance:normalize": "node scripts/maintenance/normalize-maintenance-data.mjs",
+    "maintenance:smoke:data": "node scripts/maintenance/smoke-maintenance-real-data.mjs",
+    "maintenance:smoke:api": "node scripts/maintenance/smoke-maintenance-api.mjs",
     "server:maintenance": "node src/server/server.mjs",
     "server:maintenance:dev": "node --watch src/server/server.mjs",
     "test": "node scripts/test-maintenance-kb.mjs",
