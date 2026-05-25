@@ -10,7 +10,8 @@
     "maintenance:db:rebuild": "node scripts/maintenance/rebuild-maintenance-db.mjs",
     "maintenance:import": "node scripts/maintenance/import-maintenance-staging.mjs",
     "maintenance:normalize": "node scripts/maintenance/normalize-maintenance-data.mjs",
-    "test": "node scripts/test-maintenance-kb.mjs"
+    "test": "node scripts/test-maintenance-kb.mjs",
+    "test:maintenance-workorder": "node scripts/test-maintenance-workorder-api.mjs"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
