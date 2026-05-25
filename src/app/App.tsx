@@ -19,7 +19,17 @@ import { RawDataExplorer } from './components/RawDataExplorer';
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [activePage, setActivePage] = useState('#overview');
+  const [activePage, setActivePage] = useState(() => {
+    if (typeof window !== 'undefined' && window.location.pathname === '/maintenance/workorders') {
+      return '/maintenance/workorders';
+    }
+
+    if (typeof window !== 'undefined' && window.location.hash) {
+      return window.location.hash;
+    }
+
+    return '#overview';
+  });
 
   const handleSignIn = () => {
     setIsAuthenticated(true);
@@ -52,6 +62,7 @@ export default function App() {
       case '#scrap-analysis':
         return <ScrapAnalysis sidebarCollapsed={sidebarCollapsed} onNavigate={handleNavigate} />;
       case '#station-maintenance-tracking':
+      case '/maintenance/workorders':
         return <StationMaintenanceTracking sidebarCollapsed={sidebarCollapsed} onNavigate={handleNavigate} />;
       case '#station-maintenance-analysis':
         return <StationMaintenanceAnalysis sidebarCollapsed={sidebarCollapsed} onNavigate={handleNavigate} />;

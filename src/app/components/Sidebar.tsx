@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import {
   LayoutDashboard,
   Factory,
@@ -54,7 +53,7 @@ const menuGroups: MenuGroup[] = [
   {
     title: 'Maintenance',
     items: [
-      { label: 'Station Maintenance Tracking', icon: Package, href: '#station-maintenance-tracking' },
+      { label: 'Station Maintenance Tracking', icon: Package, href: '/maintenance/workorders' },
       { label: 'Station Maintenance Analysis', icon: TrendingUp, href: '#station-maintenance-analysis' },
       { label: 'Cost & Spare Parts', icon: Boxes, href: '#maintenance-cost-spare-parts' },
       { label: 'Maintenance Knowledge Base', icon: BookOpen, href: '#maintenance-kb' },
@@ -95,8 +94,6 @@ interface SidebarProps {
 }
 
 export function Sidebar({ collapsed, onToggleCollapse, activePage, onNavigate }: SidebarProps) {
-  const [activeItem, setActiveItem] = useState('#overview');
-
   return (
     <div
       className={cn(
@@ -142,7 +139,7 @@ export function Sidebar({ collapsed, onToggleCollapse, activePage, onNavigate }:
             <ul className="space-y-1 px-2">
               {group.items.map((item) => {
                 const Icon = item.icon;
-                const isActive = activeItem === item.href;
+                const isActive = activePage === item.href || (activePage === '#station-maintenance-tracking' && item.href === '/maintenance/workorders');
 
                 return (
                   <li key={item.href}>
@@ -150,7 +147,7 @@ export function Sidebar({ collapsed, onToggleCollapse, activePage, onNavigate }:
                       href={item.href}
                       onClick={(e) => {
                         e.preventDefault();
-                        setActiveItem(item.href);
+                        window.history.pushState({}, '', item.href);
                         onNavigate(item.href);
                       }}
                       className={cn(
