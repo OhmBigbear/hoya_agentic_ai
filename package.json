@@ -6,6 +6,10 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite",
+    "maintenance:profile": "node scripts/maintenance/profile-maintenance-csv.mjs",
+    "maintenance:db:rebuild": "node scripts/maintenance/rebuild-maintenance-db.mjs",
+    "maintenance:import": "node scripts/maintenance/import-maintenance-staging.mjs",
+    "maintenance:normalize": "node scripts/maintenance/normalize-maintenance-data.mjs",
     "test": "node scripts/test-maintenance-kb.mjs"
   },
   "dependencies": {
