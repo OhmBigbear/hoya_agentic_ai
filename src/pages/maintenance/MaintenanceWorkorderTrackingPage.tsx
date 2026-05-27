@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import {
   Activity,
   AlertCircle,
@@ -36,6 +36,7 @@ import { Button } from '../../app/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../app/components/ui/card';
 import { Input } from '../../app/components/ui/input';
 import { ScrollArea } from '../../app/components/ui/scroll-area';
+import { useOperationsWorkspaceRuntime } from '../../hooks/useOperationsWorkspaceRuntime';
 import {
   getHoldReasonSummary,
   getMachineMaintenanceHistory,
@@ -46,6 +47,7 @@ import {
   getWorkorderDetail,
   getWorkorderTracking,
 } from '../../services/maintenanceWorkorderApi';
+import { requestOperationsWorkspacePreview } from '../../services/operationsWorkspaceCopilotApi';
 import type {
   MaintenanceDashboardSummary,
   MaintenanceHoldHistory,
@@ -55,9 +57,21 @@ import type {
   MaintenanceWorkOrderDetail,
   MaintenanceQueryFilters,
 } from '../../types/maintenance';
+import type {
+  Insight,
+  OperationsWorkspacePreviewRequest,
+  OperationsWorkspacePreviewResponse,
+  UiAction,
+  UiActionPreview,
+} from '../../types/operationsWorkspace';
 
 interface MaintenanceWorkorderTrackingPageProps {
   sidebarCollapsed: boolean;
+  services?: MaintenanceWorkorderTrackingServices;
+}
+
+interface MaintenanceWorkorderTrackingServices {
+  requestOperationsWorkspacePreview?: (request: OperationsWorkspacePreviewRequest) => Promise<OperationsWorkspacePreviewResponse>;
 }
 
 interface DetailState {
@@ -73,6 +87,15 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
+  insights?: Insight[];
+  uiActions?: UiActionPreview[];
+  actionResults?: ActionResult[];
+}
+
+interface ActionResult {
+  action: UiActionPreview;
+  status: 'applied' | 'rejected' | 'ignored';
+  reason?: string;
 }
 
 export interface WorkorderFilters {
@@ -112,7 +135,7 @@ const emptySummary: MaintenanceDashboardSummary = {
 
 const chartColors = ['#ef4444', '#f59e0b', '#8b5cf6', '#06b6d4', '#22c55e'];
 
-export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed }: MaintenanceWorkorderTrackingPageProps) {
+export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = {} }: MaintenanceWorkorderTrackingPageProps) {
   const [workorders, setWorkorders] = useState<MaintenanceWorkOrder[]>([]);
   const [summary, setSummary] = useState<MaintenanceDashboardSummary>(emptySummary);
   const [holdReasons, setHoldReasons] = useState<MaintenanceHoldHistory[]>([]);
@@ -128,6 +151,10 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed }: Maintenan
   const [detailState, setDetailState] = useState<Record<string, DetailState>>({});
   const [isCopilotOpen, setIsCopilotOpen] = useState(false);
   const [inputMessage, setInputMessage] = useState('');
+  const [isCopilotSending, setIsCopilotSending] = useState(false);
+  const [copilotError, setCopilotError] = useState<string | null>(null);
+  const operationsWorkspace = useOperationsWorkspaceRuntime();
+  const previewRequest = services.requestOperationsWorkspacePreview ?? requestOperationsWorkspacePreview;
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 1,
@@ -208,6 +235,10 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed }: Maintenan
   const kpis = useMemo(() => buildKpis(summary, workorders, stockRisk), [summary, workorders, stockRisk]);
   const mttrTrend = useMemo(() => buildMttrTrend(summary), [summary]);
   const frequencyData = useMemo(() => buildFrequencyData(workorders, repeatFailures), [workorders, repeatFailures]);
+  const sortedWorkorders = useMemo(
+    () => sortWorkorders(workorders, operationsWorkspace.state.tableSorts.workorder_table),
+    [workorders, operationsWorkspace.state.tableSorts.workorder_table],
+  );
   const selectedWorkorder = selectedWorkorderNo ? workorders.find((workorder) => workorder.workorder_no === selectedWorkorderNo) || detailState[selectedWorkorderNo]?.detail : undefined;
   const totalPages = Math.max(1, Math.ceil(totalWorkorders / pageSize));
 
@@ -261,20 +292,91 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed }: Maintenan
     }));
   };
 
-  const handleSendMessage = () => {
+  const applyLiveUiActions = useCallback((actions: UiActionPreview[]): ActionResult[] => {
+    const results: ActionResult[] = [];
+    const appliedActions: UiAction[] = [];
+
+    actions.forEach((action) => {
+      if (!action.valid) {
+        results.push({ action, status: 'rejected', reason: action.validation_errors.join('; ') || 'Invalid action' });
+        return;
+      }
+
+      const target = action.target?.trim();
+      if (!isKnownOperationsWorkspaceTarget(target, action.type)) {
+        results.push({ action, status: 'ignored', reason: `Unknown target '${target || 'none'}'` });
+        return;
+      }
+
+      const result = applyHoyaUiAction(action, {
+        workorders,
+        setFilters,
+        openWorkorderDrawer,
+      });
+      results.push(result);
+
+      if (result.status === 'applied') {
+        appliedActions.push(action);
+      }
+    });
+
+    if (appliedActions.length > 0) {
+      operationsWorkspace.applyActions(appliedActions);
+    }
+
+    return results;
+  }, [openWorkorderDrawer, operationsWorkspace, workorders]);
+
+  const handleSendMessage = async () => {
     const trimmedMessage = inputMessage.trim();
-    if (!trimmedMessage) {
+    if (!trimmedMessage || isCopilotSending) {
       return;
     }
 
     const timestamp = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
-    const assistantMessage = buildAssistantResponse(trimmedMessage, summary, workorders, selectedWorkorder);
+    setInputMessage('');
+    setIsCopilotSending(true);
+    setCopilotError(null);
     setMessages((current) => [
       ...current,
       { id: current.length + 1, role: 'user', content: trimmedMessage, timestamp },
-      { id: current.length + 2, role: 'assistant', content: assistantMessage, timestamp },
     ]);
-    setInputMessage('');
+
+    try {
+      const preview = await previewRequest({
+        message: trimmedMessage,
+        filters: buildOperationsWorkspacePreviewFilters(filters, operationsWorkspace.state, selectedWorkorder),
+        limit: 5,
+      });
+      const actionResults = applyLiveUiActions(preview.ui_actions);
+
+      setMessages((current) => [
+        ...current,
+        {
+          id: current.length + 1,
+          role: 'assistant',
+          content: preview.assistant_text || 'No assistant summary was returned by Agentic Core.',
+          timestamp,
+          insights: preview.insights,
+          uiActions: preview.ui_actions,
+          actionResults,
+        },
+      ]);
+    } catch (previewError) {
+      const errorMessage = previewError instanceof Error ? previewError.message : 'Agentic Core preview request failed.';
+      setCopilotError(errorMessage);
+      setMessages((current) => [
+        ...current,
+        {
+          id: current.length + 1,
+          role: 'assistant',
+          content: `${buildAssistantResponse(trimmedMessage, summary, workorders, selectedWorkorder)}\n\nAgentic Core preview unavailable: ${errorMessage}`,
+          timestamp,
+        },
+      ]);
+    } finally {
+      setIsCopilotSending(false);
+    }
   };
 
   return (
@@ -307,7 +409,7 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed }: Maintenan
             <MaintenanceKpiCards loading={loading} kpis={kpis} />
 
             <MaintenanceWorkorderTable
-              workorders={workorders}
+              workorders={sortedWorkorders}
               loading={loading}
               filters={filters}
               total={totalWorkorders}
@@ -316,6 +418,7 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed }: Maintenan
               onFiltersChange={setFilters}
               onPageChange={setPage}
               onOpenWorkorder={openWorkorderDrawer}
+              highlightedEntityIds={operationsWorkspace.state.highlightedEntities.workorder_table ?? []}
             />
 
             <MaintenanceAnalyticsSection
@@ -324,6 +427,7 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed }: Maintenan
               holdReasons={holdReasons}
               frequencyData={frequencyData}
               stockRisk={stockRisk}
+              focusedChartId={operationsWorkspace.state.focusedChartId}
             />
           </div>
         </div>
@@ -337,6 +441,9 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed }: Maintenan
           onSendMessage={handleSendMessage}
           summary={summary}
           selectedWorkorder={selectedWorkorder}
+          isSending={isCopilotSending}
+          copilotError={copilotError}
+          workspaceState={operationsWorkspace.state}
         />
 
         <WorkorderDetailDrawer
@@ -403,6 +510,7 @@ export function MaintenanceWorkorderTable({
   onFiltersChange = () => {},
   onPageChange = () => {},
   onOpenWorkorder = () => {},
+  highlightedEntityIds = [],
 }: {
   workorders: MaintenanceWorkOrder[];
   loading: boolean;
@@ -413,6 +521,7 @@ export function MaintenanceWorkorderTable({
   onFiltersChange?: (filters: WorkorderFilters) => void;
   onPageChange?: (page: number) => void;
   onOpenWorkorder?: (workorder: MaintenanceWorkOrder) => void;
+  highlightedEntityIds?: string[];
 }) {
   const updateFilter = (key: keyof WorkorderFilters, value: string | boolean) => {
     onFiltersChange({ ...filters, [key]: value });
@@ -523,6 +632,7 @@ export function MaintenanceWorkorderTable({
                       workorder={workorder}
                       progress={progress}
                       onOpenWorkorder={onOpenWorkorder}
+                      highlighted={isWorkorderHighlighted(workorder, highlightedEntityIds)}
                     />
                   );
                 })}
@@ -551,13 +661,15 @@ function WorkorderTableRow({
   workorder,
   progress,
   onOpenWorkorder,
+  highlighted = false,
 }: {
   workorder: MaintenanceWorkOrder;
   progress: number;
   onOpenWorkorder: (workorder: MaintenanceWorkOrder) => void;
+  highlighted?: boolean;
 }) {
   return (
-      <tr className="border-b border-white/5 hover:bg-white/5 cursor-pointer" onClick={() => onOpenWorkorder(workorder)} tabIndex={0} onKeyDown={(event) => event.key === 'Enter' && onOpenWorkorder(workorder)}>
+      <tr className={`border-b border-white/5 hover:bg-white/5 cursor-pointer ${highlighted ? 'outline outline-1 outline-cyan-400/70 bg-cyan-500/10' : ''}`} onClick={() => onOpenWorkorder(workorder)} tabIndex={0} onKeyDown={(event) => event.key === 'Enter' && onOpenWorkorder(workorder)}>
         <td className="py-2.5 px-3 min-w-36">
           <span className="text-sm text-cyan-400 font-medium">{workorder.workorder_no}</span>
           <p className="text-xs text-slate-500 truncate max-w-48">{truncateText(workorder.failure_description || workorder.reason || 'No issue text', 52)}</p>
@@ -752,12 +864,14 @@ export function MaintenanceAnalyticsSection({
   holdReasons,
   frequencyData,
   stockRisk,
+  focusedChartId,
 }: {
   loading: boolean;
   mttrTrend: Array<{ label: string; mttr: number; downtime: number }>;
   holdReasons: MaintenanceHoldHistory[];
   frequencyData: Array<{ machine: string; count: number }>;
   stockRisk: MaintenanceRiskMachine[];
+  focusedChartId?: string | null;
 }) {
   const delayReasons = holdReasons.slice(0, 5).map((reason, index) => ({
     reason: reason.hold_reason_description || 'Unspecified',
@@ -767,7 +881,7 @@ export function MaintenanceAnalyticsSection({
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-      <Card className="bg-[#141b2e] border-white/10 lg:col-span-2">
+      <Card className={`bg-[#141b2e] border-white/10 lg:col-span-2 ${focusedChartId === 'mttr_trend_chart' ? 'ring-1 ring-cyan-400/70' : ''}`}>
         <CardHeader>
           <CardTitle className="text-white text-lg flex items-center gap-2">
             <Timer className="w-5 h-5 text-cyan-400" />
@@ -797,7 +911,7 @@ export function MaintenanceAnalyticsSection({
         </CardContent>
       </Card>
 
-      <Card className="bg-[#141b2e] border-white/10">
+      <Card className={`bg-[#141b2e] border-white/10 ${focusedChartId === 'delay_reasons_chart' ? 'ring-1 ring-cyan-400/70' : ''}`}>
         <CardHeader>
           <CardTitle className="text-white text-lg flex items-center gap-2">
             <AlertCircle className="w-5 h-5 text-orange-400" />
@@ -832,7 +946,7 @@ export function MaintenanceAnalyticsSection({
         </CardContent>
       </Card>
 
-      <Card className="bg-[#141b2e] border-white/10">
+      <Card className={`bg-[#141b2e] border-white/10 ${focusedChartId === 'maintenance_frequency_chart' ? 'ring-1 ring-cyan-400/70' : ''}`}>
         <CardHeader>
           <CardTitle className="text-white text-lg flex items-center gap-2">
             <BarChart3 className="w-5 h-5 text-purple-400" />
@@ -855,7 +969,7 @@ export function MaintenanceAnalyticsSection({
         </CardContent>
       </Card>
 
-      <Card className="bg-[#141b2e] border-white/10">
+      <Card className={`bg-[#141b2e] border-white/10 ${focusedChartId === 'maintenance_history_signals' ? 'ring-1 ring-cyan-400/70' : ''}`}>
         <CardHeader>
           <CardTitle className="text-white text-lg flex items-center gap-2">
             <History className="w-5 h-5 text-green-400" />
@@ -899,6 +1013,9 @@ export function MaintenanceAssistantPanel({
   onSendMessage,
   summary,
   selectedWorkorder,
+  isSending = false,
+  copilotError = null,
+  workspaceState,
 }: {
   isOpen: boolean;
   onClose: () => void;
@@ -908,6 +1025,9 @@ export function MaintenanceAssistantPanel({
   onSendMessage: () => void;
   summary: MaintenanceDashboardSummary;
   selectedWorkorder?: MaintenanceWorkOrder;
+  isSending?: boolean;
+  copilotError?: string | null;
+  workspaceState?: ReturnType<typeof useOperationsWorkspaceRuntime>['state'];
 }) {
   return (
     <div
@@ -965,14 +1085,32 @@ export function MaintenanceAssistantPanel({
                 </div>
                 <div className={`text-xs text-slate-300 p-3 rounded-lg whitespace-pre-line leading-relaxed ${message.role === 'user' ? 'bg-[#1e293b]' : 'bg-[#141b2e] border border-white/10'}`}>
                   {message.content}
+                  {message.role === 'assistant' && <AssistantStructuredBlocks message={message} />}
                 </div>
               </div>
             </div>
           ))}
+          {isSending && (
+            <div className="text-xs text-slate-400 bg-[#141b2e] border border-white/10 rounded-lg p-3">
+              Requesting Agentic Core preview...
+            </div>
+          )}
         </div>
       </ScrollArea>
 
       <div className="p-4 border-t border-white/10">
+        {copilotError && (
+          <div className="mb-3 rounded border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-200">
+            {copilotError}
+          </div>
+        )}
+        {workspaceState && (
+          <div className="mb-3 rounded border border-white/10 bg-[#141b2e] p-2 text-xs text-slate-400">
+            <span>Workspace: </span>
+            <span>{workspaceState.timeRange ? `Time range ${workspaceState.timeRange}` : 'Current API snapshot'}</span>
+            {workspaceState.focusedChartId && <span> · Focus {formatWorkspaceLabel(workspaceState.focusedChartId)}</span>}
+          </div>
+        )}
         <div className="mb-3">
           <p className="text-xs text-slate-400 mb-2">Ask the Copilot:</p>
           <div className="space-y-1">
@@ -1004,12 +1142,59 @@ export function MaintenanceAssistantPanel({
             placeholder="Ask about maintenance issues..."
             className="bg-[#1e293b] border-white/10 text-white placeholder:text-slate-500 text-xs h-9"
           />
-          <Button onClick={onSendMessage} disabled={!inputMessage.trim()} className="bg-cyan-500 hover:bg-cyan-600 text-white h-9 px-3" size="sm">
+          <Button onClick={onSendMessage} disabled={!inputMessage.trim() || isSending} className="bg-cyan-500 hover:bg-cyan-600 text-white h-9 px-3" size="sm" aria-label="Send maintenance assistant query">
             <Send className="w-3 h-3" />
           </Button>
         </div>
-        <p className="text-xs text-slate-500 mt-2">Prepared for future Agentic Core integration</p>
+        <p className="text-xs text-slate-500 mt-2">Agentic Core preview is read-only; UI actions only change local visualization state</p>
       </div>
+    </div>
+  );
+}
+
+function AssistantStructuredBlocks({ message }: { message: ChatMessage }) {
+  const hasInsights = Boolean(message.insights?.length);
+  const hasActions = Boolean(message.uiActions?.length);
+
+  if (!hasInsights && !hasActions) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 space-y-3 border-t border-white/10 pt-3">
+      {hasInsights && (
+        <div className="space-y-2">
+          <p className="text-[11px] uppercase text-slate-500">Insights</p>
+          {message.insights?.map((insight) => (
+            <div key={insight.id || insight.title} className="rounded border border-white/10 bg-[#0f1623] p-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium text-white">{insight.title || 'Insight'}</span>
+                <Badge className={getInsightBadgeClass(insight.severity)}>{insight.severity}</Badge>
+              </div>
+              <p className="mt-1 text-xs text-slate-400">{insight.summary}</p>
+            </div>
+          ))}
+        </div>
+      )}
+      {hasActions && (
+        <div className="space-y-2">
+          <p className="text-[11px] uppercase text-slate-500">UI Actions</p>
+          {message.uiActions?.map((action, index) => {
+            const result = message.actionResults?.[index];
+            return (
+              <div key={`${action.action_id ?? action.type}-${index}`} className="rounded border border-white/10 bg-[#0f1623] p-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-slate-200">{action.type} - {action.target || 'no target'}</span>
+                  <Badge className={getActionResultBadgeClass(result?.status ?? (action.valid ? 'applied' : 'rejected'))}>
+                    {result?.status ?? (action.valid ? 'valid' : 'rejected')}
+                  </Badge>
+                </div>
+                {result?.reason && <p className="mt-1 text-[11px] text-slate-500">{result.reason}</p>}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1115,6 +1300,153 @@ export function buildWorkorderQuery(filters: WorkorderFilters, page = 0): Mainte
     limit: pageSize,
     offset: page * pageSize,
   };
+}
+
+export function buildOperationsWorkspacePreviewFilters(
+  filters: WorkorderFilters,
+  workspaceState: ReturnType<typeof useOperationsWorkspaceRuntime>['state'],
+  selectedWorkorder?: MaintenanceWorkOrder,
+) {
+  return {
+    workorder_table: {
+      search: filters.search,
+      status: filters.status,
+      machine: filters.machine,
+      workType: filters.workType,
+      priority: filters.priority,
+      overdueOnly: filters.overdueOnly,
+      waitingPartsOnly: filters.waitingPartsOnly,
+    },
+    time_range: workspaceState.timeRange,
+    selected_workorder: selectedWorkorder?.workorder_no,
+    selected_machine: selectedWorkorder?.equipment_no,
+  };
+}
+
+function applyHoyaUiAction(
+  action: UiActionPreview,
+  context: {
+    workorders: MaintenanceWorkOrder[];
+    setFilters: Dispatch<SetStateAction<WorkorderFilters>>;
+    openWorkorderDrawer: (workorder: MaintenanceWorkOrder) => Promise<void>;
+  },
+): ActionResult {
+  switch (action.type) {
+    case 'set_filter':
+      context.setFilters((current) => ({ ...current, ...toWorkorderFilters(action.filters ?? {}) }));
+      return { action, status: 'applied' };
+    case 'clear_filter':
+      context.setFilters(defaultFilters);
+      return { action, status: 'applied' };
+    case 'open_detail_panel': {
+      const workorder = context.workorders.find((item) => item.workorder_no === action.entity_id);
+      if (!workorder) {
+        return { action, status: 'ignored', reason: `Workorder '${action.entity_id}' is not in the current result set` };
+      }
+      void context.openWorkorderDrawer(workorder);
+      return { action, status: 'applied' };
+    }
+    case 'focus_chart':
+    case 'set_time_range':
+    case 'highlight_entities':
+    case 'sort_table':
+      return { action, status: 'applied' };
+    default:
+      return { action, status: 'rejected', reason: `Unsupported action '${String(action.type)}'` };
+  }
+}
+
+function toWorkorderFilters(actionFilters: Record<string, unknown>): Partial<WorkorderFilters> {
+  const next: Partial<WorkorderFilters> = {};
+  const search = getStringFilter(actionFilters.search ?? actionFilters.q ?? actionFilters.workorder_no);
+  const status = getStringFilter(actionFilters.status);
+  const machine = getStringFilter(actionFilters.machine ?? actionFilters.equipment_no ?? actionFilters.entity_id);
+  const workType = getStringFilter(actionFilters.workType ?? actionFilters.work_type ?? actionFilters.job_type);
+  const priority = getStringFilter(actionFilters.priority);
+
+  if (search !== undefined) next.search = search;
+  if (status !== undefined) next.status = status;
+  if (machine !== undefined) next.machine = machine;
+  if (workType !== undefined) next.workType = workType;
+  if (priority !== undefined) next.priority = priority;
+  if (typeof actionFilters.overdueOnly === 'boolean') next.overdueOnly = actionFilters.overdueOnly;
+  if (typeof actionFilters.overdue === 'boolean') next.overdueOnly = actionFilters.overdue;
+  if (typeof actionFilters.waitingPartsOnly === 'boolean') next.waitingPartsOnly = actionFilters.waitingPartsOnly;
+  if (typeof actionFilters.waiting_parts === 'boolean') next.waitingPartsOnly = actionFilters.waiting_parts;
+
+  return next;
+}
+
+function sortWorkorders(workorders: MaintenanceWorkOrder[], sort?: { field: string; direction: 'asc' | 'desc' }) {
+  if (!sort) {
+    return workorders;
+  }
+
+  const sorted = [...workorders].sort((left, right) => {
+    const leftValue = getSortableWorkorderValue(left, sort.field);
+    const rightValue = getSortableWorkorderValue(right, sort.field);
+    if (leftValue < rightValue) return sort.direction === 'asc' ? -1 : 1;
+    if (leftValue > rightValue) return sort.direction === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  return sorted;
+}
+
+function getSortableWorkorderValue(workorder: MaintenanceWorkOrder, field: string): string | number {
+  switch (field) {
+    case 'workorder_no':
+    case 'workorder':
+      return workorder.workorder_no;
+    case 'machine':
+    case 'equipment_no':
+      return workorder.equipment_no ?? '';
+    case 'status':
+      return workorder.status ?? '';
+    case 'priority':
+      return priorityRank(workorder.priority);
+    case 'elapsed':
+    case 'total_repair_time_hours':
+      return workorder.total_repair_time_hours ?? 0;
+    case 'downtime':
+    case 'down_time_hours':
+      return workorder.down_time_hours ?? 0;
+    case 'progress':
+      return getProgress(workorder);
+    case 'eta':
+    case 'plan_finish':
+      return timestamp(workorder.plan_finish);
+    default:
+      return String((workorder as unknown as Record<string, unknown>)[field] ?? '');
+  }
+}
+
+function isKnownOperationsWorkspaceTarget(target: string | undefined, type: string): boolean {
+  if (type === 'clear_filter' && !target) {
+    return true;
+  }
+
+  return new Set([
+    'workorder_table',
+    'workorder_drawer',
+    'maintenance_dashboard',
+    'mttr_trend_chart',
+    'delay_reasons_chart',
+    'maintenance_frequency_chart',
+    'maintenance_history_signals',
+  ]).has(target ?? '');
+}
+
+function isWorkorderHighlighted(workorder: MaintenanceWorkOrder, entityIds: string[]) {
+  return entityIds.some((entityId) => (
+    entityId === workorder.workorder_no ||
+    entityId === workorder.equipment_no ||
+    entityId === workorder.work_order_id
+  ));
+}
+
+function getStringFilter(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
 }
 
 function truncateText(value: string, maxLength: number) {
@@ -1253,6 +1585,48 @@ function getStockRiskBadgeClass(risk?: string) {
     return 'bg-red-500/20 text-red-300 border-red-500/30';
   }
   return 'bg-green-500/20 text-green-300 border-green-500/30';
+}
+
+function getInsightBadgeClass(severity?: string) {
+  const normalized = severity?.toLowerCase() ?? '';
+  if (normalized === 'critical' || normalized === 'high') {
+    return 'bg-red-500/20 text-red-300 border-red-500/30 text-[10px]';
+  }
+  if (normalized === 'medium') {
+    return 'bg-orange-500/20 text-orange-300 border-orange-500/30 text-[10px]';
+  }
+  return 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30 text-[10px]';
+}
+
+function getActionResultBadgeClass(status: ActionResult['status'] | 'applied' | 'valid') {
+  if (status === 'applied' || status === 'valid') {
+    return 'bg-green-500/20 text-green-300 border-green-500/30 text-[10px]';
+  }
+  if (status === 'ignored') {
+    return 'bg-slate-500/20 text-slate-300 border-slate-500/30 text-[10px]';
+  }
+  return 'bg-red-500/20 text-red-300 border-red-500/30 text-[10px]';
+}
+
+function formatWorkspaceLabel(value: string) {
+  return value.replace(/_/g, ' ');
+}
+
+function priorityRank(priority?: string) {
+  const normalized = priority?.toLowerCase() ?? '';
+  if (normalized.includes('critical') || normalized.includes('urgent')) return 4;
+  if (normalized.includes('high')) return 3;
+  if (normalized.includes('normal') || normalized.includes('medium')) return 2;
+  if (normalized.includes('low')) return 1;
+  return 0;
+}
+
+function timestamp(value?: string) {
+  if (!value) {
+    return 0;
+  }
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 function formatWorkType(type?: string) {
