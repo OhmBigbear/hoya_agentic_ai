@@ -87,6 +87,29 @@ export interface FocusedEntity {
   entityId: string;
 }
 
+export interface SynchronizedEntityContext {
+  machineId: string | null;
+  workorderId: string | null;
+  insightId: string | null;
+  entityType: string | null;
+  entityId: string | null;
+  relatedEntityIds: string[];
+  source: 'table' | 'chart' | 'drawer' | 'insight' | 'action' | 'time_range' | null;
+}
+
+export interface SynchronizedTimeRange {
+  value: string;
+  label?: string;
+  from?: string;
+  to?: string;
+}
+
+export interface VisualizationFocusTarget {
+  targetType: 'table' | 'chart' | 'drawer' | 'insight' | 'dashboard';
+  targetId: string;
+  relatedEntityIds: string[];
+}
+
 export interface OpenPanelState {
   target: string;
   entityId?: string;
@@ -115,6 +138,14 @@ export interface OperationsWorkspaceState {
   highlightedEntities: Record<string, string[]>;
   openPanel: OpenPanelState | null;
   timeRange: string | null;
+  selectedMachineId: string | null;
+  selectedWorkorderId: string | null;
+  selectedInsightId: string | null;
+  selectedChartId: string | null;
+  synchronizedEntityContext: SynchronizedEntityContext | null;
+  synchronizedTimeRange: SynchronizedTimeRange | null;
+  visualizationFocusTarget: VisualizationFocusTarget | null;
+  activeInsightIds: string[];
   tableSorts: Record<string, TableSortState>;
   appliedActionHistory: AppliedUiAction[];
 }

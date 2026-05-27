@@ -257,9 +257,12 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedWorkorderNo]);
 
-  const openWorkorderDrawer = async (workorder: MaintenanceWorkOrder) => {
+  const openWorkorderDrawer = async (workorder: MaintenanceWorkOrder, synchronize = true) => {
     const workorderNo = workorder.workorder_no;
     setSelectedWorkorderNo(workorderNo);
+    if (synchronize) {
+      operationsWorkspace.applyAction(buildWorkorderSelectionAction(workorder, 'table'));
+    }
 
     if (detailState[workorderNo]?.detail || detailState[workorderNo]?.loading) {
       return;
@@ -299,12 +302,14 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
     actions.forEach((action) => {
       if (!action.valid) {
         results.push({ action, status: 'rejected', reason: action.validation_errors.join('; ') || 'Invalid action' });
+        operationsWorkspace.applyAction(action);
         return;
       }
 
       const target = action.target?.trim();
       if (!isKnownOperationsWorkspaceTarget(target, action.type)) {
         results.push({ action, status: 'ignored', reason: `Unknown target '${target || 'none'}'` });
+        operationsWorkspace.applyAction(action);
         return;
       }
 
@@ -326,6 +331,33 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
 
     return results;
   }, [openWorkorderDrawer, operationsWorkspace, workorders]);
+
+  const handleInsightSelected = useCallback((insight: Insight) => {
+    const synchronization = buildInsightSynchronizationActions(insight, workorders);
+    operationsWorkspace.applyActions(synchronization.actions);
+
+    if (synchronization.workorderToOpen) {
+      void openWorkorderDrawer(synchronization.workorderToOpen, false);
+    }
+  }, [openWorkorderDrawer, operationsWorkspace, workorders]);
+
+  const handleChartFocus = useCallback((chartId: string) => {
+    if (!isKnownOperationsWorkspaceTarget(chartId, 'focus_chart')) {
+      operationsWorkspace.applyAction({
+        type: 'focus_chart',
+        target: chartId,
+        action_id: `local-chart-focus-rejected-${Date.now()}`,
+      });
+      return;
+    }
+
+    operationsWorkspace.applyAction({
+      type: 'focus_chart',
+      target: chartId,
+      entity_ids: getChartRelatedEntityIds(chartId, workorders, repeatFailures, stockRisk),
+      action_id: `local-chart-focus-${chartId}-${Date.now()}`,
+    });
+  }, [operationsWorkspace, repeatFailures, stockRisk, workorders]);
 
   const handleSendMessage = async () => {
     const trimmedMessage = inputMessage.trim();
@@ -419,6 +451,8 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
               onPageChange={setPage}
               onOpenWorkorder={openWorkorderDrawer}
               highlightedEntityIds={operationsWorkspace.state.highlightedEntities.workorder_table ?? []}
+              selectedWorkorderId={operationsWorkspace.state.selectedWorkorderId}
+              selectedMachineId={operationsWorkspace.state.selectedMachineId}
             />
 
             <MaintenanceAnalyticsSection
@@ -428,6 +462,8 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
               frequencyData={frequencyData}
               stockRisk={stockRisk}
               focusedChartId={operationsWorkspace.state.focusedChartId}
+              highlightedEntityIds={operationsWorkspace.state.highlightedEntities.workorder_table ?? []}
+              onChartFocus={handleChartFocus}
             />
           </div>
         </div>
@@ -444,6 +480,7 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
           isSending={isCopilotSending}
           copilotError={copilotError}
           workspaceState={operationsWorkspace.state}
+          onInsightSelected={handleInsightSelected}
         />
 
         <WorkorderDetailDrawer
@@ -511,6 +548,8 @@ export function MaintenanceWorkorderTable({
   onPageChange = () => {},
   onOpenWorkorder = () => {},
   highlightedEntityIds = [],
+  selectedWorkorderId = null,
+  selectedMachineId = null,
 }: {
   workorders: MaintenanceWorkOrder[];
   loading: boolean;
@@ -522,6 +561,8 @@ export function MaintenanceWorkorderTable({
   onPageChange?: (page: number) => void;
   onOpenWorkorder?: (workorder: MaintenanceWorkOrder) => void;
   highlightedEntityIds?: string[];
+  selectedWorkorderId?: string | null;
+  selectedMachineId?: string | null;
 }) {
   const updateFilter = (key: keyof WorkorderFilters, value: string | boolean) => {
     onFiltersChange({ ...filters, [key]: value });
@@ -633,6 +674,7 @@ export function MaintenanceWorkorderTable({
                       progress={progress}
                       onOpenWorkorder={onOpenWorkorder}
                       highlighted={isWorkorderHighlighted(workorder, highlightedEntityIds)}
+                      selected={isWorkorderSelected(workorder, selectedWorkorderId, selectedMachineId)}
                     />
                   );
                 })}
@@ -662,14 +704,16 @@ function WorkorderTableRow({
   progress,
   onOpenWorkorder,
   highlighted = false,
+  selected = false,
 }: {
   workorder: MaintenanceWorkOrder;
   progress: number;
   onOpenWorkorder: (workorder: MaintenanceWorkOrder) => void;
   highlighted?: boolean;
+  selected?: boolean;
 }) {
   return (
-      <tr className={`border-b border-white/5 hover:bg-white/5 cursor-pointer ${highlighted ? 'outline outline-1 outline-cyan-400/70 bg-cyan-500/10' : ''}`} onClick={() => onOpenWorkorder(workorder)} tabIndex={0} onKeyDown={(event) => event.key === 'Enter' && onOpenWorkorder(workorder)}>
+      <tr className={`border-b border-white/5 hover:bg-white/5 cursor-pointer ${highlighted ? 'outline outline-1 outline-cyan-400/70 bg-cyan-500/10' : ''} ${selected ? 'bg-cyan-500/15' : ''}`} onClick={() => onOpenWorkorder(workorder)} tabIndex={0} onKeyDown={(event) => event.key === 'Enter' && onOpenWorkorder(workorder)}>
         <td className="py-2.5 px-3 min-w-36">
           <span className="text-sm text-cyan-400 font-medium">{workorder.workorder_no}</span>
           <p className="text-xs text-slate-500 truncate max-w-48">{truncateText(workorder.failure_description || workorder.reason || 'No issue text', 52)}</p>
@@ -865,6 +909,8 @@ export function MaintenanceAnalyticsSection({
   frequencyData,
   stockRisk,
   focusedChartId,
+  highlightedEntityIds = [],
+  onChartFocus = () => {},
 }: {
   loading: boolean;
   mttrTrend: Array<{ label: string; mttr: number; downtime: number }>;
@@ -872,6 +918,8 @@ export function MaintenanceAnalyticsSection({
   frequencyData: Array<{ machine: string; count: number }>;
   stockRisk: MaintenanceRiskMachine[];
   focusedChartId?: string | null;
+  highlightedEntityIds?: string[];
+  onChartFocus?: (chartId: string) => void;
 }) {
   const delayReasons = holdReasons.slice(0, 5).map((reason, index) => ({
     reason: reason.hold_reason_description || 'Unspecified',
@@ -881,7 +929,7 @@ export function MaintenanceAnalyticsSection({
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-      <Card className={`bg-[#141b2e] border-white/10 lg:col-span-2 ${focusedChartId === 'mttr_trend_chart' ? 'ring-1 ring-cyan-400/70' : ''}`}>
+      <Card className={`bg-[#141b2e] border-white/10 lg:col-span-2 cursor-pointer ${focusedChartId === 'mttr_trend_chart' ? 'ring-1 ring-cyan-400/70 shadow-[0_0_0_1px_rgba(34,211,238,0.25)]' : ''}`} onClick={() => onChartFocus('mttr_trend_chart')}>
         <CardHeader>
           <CardTitle className="text-white text-lg flex items-center gap-2">
             <Timer className="w-5 h-5 text-cyan-400" />
@@ -911,7 +959,7 @@ export function MaintenanceAnalyticsSection({
         </CardContent>
       </Card>
 
-      <Card className={`bg-[#141b2e] border-white/10 ${focusedChartId === 'delay_reasons_chart' ? 'ring-1 ring-cyan-400/70' : ''}`}>
+      <Card className={`bg-[#141b2e] border-white/10 cursor-pointer ${focusedChartId === 'delay_reasons_chart' ? 'ring-1 ring-cyan-400/70 shadow-[0_0_0_1px_rgba(34,211,238,0.25)]' : ''}`} onClick={() => onChartFocus('delay_reasons_chart')}>
         <CardHeader>
           <CardTitle className="text-white text-lg flex items-center gap-2">
             <AlertCircle className="w-5 h-5 text-orange-400" />
@@ -946,7 +994,7 @@ export function MaintenanceAnalyticsSection({
         </CardContent>
       </Card>
 
-      <Card className={`bg-[#141b2e] border-white/10 ${focusedChartId === 'maintenance_frequency_chart' ? 'ring-1 ring-cyan-400/70' : ''}`}>
+      <Card className={`bg-[#141b2e] border-white/10 cursor-pointer ${focusedChartId === 'maintenance_frequency_chart' ? 'ring-1 ring-cyan-400/70 shadow-[0_0_0_1px_rgba(34,211,238,0.25)]' : ''}`} onClick={() => onChartFocus('maintenance_frequency_chart')}>
         <CardHeader>
           <CardTitle className="text-white text-lg flex items-center gap-2">
             <BarChart3 className="w-5 h-5 text-purple-400" />
@@ -962,14 +1010,18 @@ export function MaintenanceAnalyticsSection({
                 <XAxis type="number" stroke="#94a3b8" style={{ fontSize: '11px' }} />
                 <YAxis type="category" dataKey="machine" stroke="#94a3b8" style={{ fontSize: '11px' }} width={110} />
                 <Tooltip contentStyle={tooltipStyle} />
-                <Bar dataKey="count" name="Workorders" fill="#8b5cf6" />
+                <Bar dataKey="count" name="Workorders" fill="#8b5cf6">
+                  {frequencyData.map((entry) => (
+                    <Cell key={entry.machine} fill={highlightedEntityIds.includes(entry.machine) ? '#06b6d4' : '#8b5cf6'} />
+                  ))}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           )}
         </CardContent>
       </Card>
 
-      <Card className={`bg-[#141b2e] border-white/10 ${focusedChartId === 'maintenance_history_signals' ? 'ring-1 ring-cyan-400/70' : ''}`}>
+      <Card className={`bg-[#141b2e] border-white/10 cursor-pointer ${focusedChartId === 'maintenance_history_signals' ? 'ring-1 ring-cyan-400/70 shadow-[0_0_0_1px_rgba(34,211,238,0.25)]' : ''}`} onClick={() => onChartFocus('maintenance_history_signals')}>
         <CardHeader>
           <CardTitle className="text-white text-lg flex items-center gap-2">
             <History className="w-5 h-5 text-green-400" />
@@ -1016,6 +1068,7 @@ export function MaintenanceAssistantPanel({
   isSending = false,
   copilotError = null,
   workspaceState,
+  onInsightSelected = () => {},
 }: {
   isOpen: boolean;
   onClose: () => void;
@@ -1028,6 +1081,7 @@ export function MaintenanceAssistantPanel({
   isSending?: boolean;
   copilotError?: string | null;
   workspaceState?: ReturnType<typeof useOperationsWorkspaceRuntime>['state'];
+  onInsightSelected?: (insight: Insight) => void;
 }) {
   return (
     <div
@@ -1085,7 +1139,13 @@ export function MaintenanceAssistantPanel({
                 </div>
                 <div className={`text-xs text-slate-300 p-3 rounded-lg whitespace-pre-line leading-relaxed ${message.role === 'user' ? 'bg-[#1e293b]' : 'bg-[#141b2e] border border-white/10'}`}>
                   {message.content}
-                  {message.role === 'assistant' && <AssistantStructuredBlocks message={message} />}
+                  {message.role === 'assistant' && (
+                    <AssistantStructuredBlocks
+                      message={message}
+                      activeInsightIds={workspaceState?.activeInsightIds ?? []}
+                      onInsightSelected={onInsightSelected}
+                    />
+                  )}
                 </div>
               </div>
             </div>
@@ -1105,10 +1165,17 @@ export function MaintenanceAssistantPanel({
           </div>
         )}
         {workspaceState && (
-          <div className="mb-3 rounded border border-white/10 bg-[#141b2e] p-2 text-xs text-slate-400">
-            <span>Workspace: </span>
-            <span>{workspaceState.timeRange ? `Time range ${workspaceState.timeRange}` : 'Current API snapshot'}</span>
-            {workspaceState.focusedChartId && <span> · Focus {formatWorkspaceLabel(workspaceState.focusedChartId)}</span>}
+          <div className="mb-3 rounded border border-white/10 bg-[#141b2e] p-2 text-xs text-slate-400" data-testid="workspace-synchronization-diagnostics">
+            <details>
+              <summary className="cursor-pointer text-slate-300">Workspace synchronization</summary>
+              <div className="mt-2 space-y-1">
+                <div>{workspaceState.synchronizedTimeRange ? `Time range ${workspaceState.synchronizedTimeRange.value}` : 'Current API snapshot'}</div>
+                <div>Selected {workspaceState.selectedWorkorderId ?? workspaceState.selectedMachineId ?? 'none'}</div>
+                <div>Focused chart {workspaceState.focusedChartId ? formatWorkspaceLabel(workspaceState.focusedChartId) : 'none'}</div>
+                <div>Active insights {workspaceState.activeInsightIds.length}</div>
+                <div>Highlighted {countHighlightedEntities(workspaceState.highlightedEntities)}</div>
+              </div>
+            </details>
           </div>
         )}
         <div className="mb-3">
@@ -1152,7 +1219,15 @@ export function MaintenanceAssistantPanel({
   );
 }
 
-function AssistantStructuredBlocks({ message }: { message: ChatMessage }) {
+function AssistantStructuredBlocks({
+  message,
+  activeInsightIds = [],
+  onInsightSelected = () => {},
+}: {
+  message: ChatMessage;
+  activeInsightIds?: string[];
+  onInsightSelected?: (insight: Insight) => void;
+}) {
   const hasInsights = Boolean(message.insights?.length);
   const hasActions = Boolean(message.uiActions?.length);
 
@@ -1166,13 +1241,18 @@ function AssistantStructuredBlocks({ message }: { message: ChatMessage }) {
         <div className="space-y-2">
           <p className="text-[11px] uppercase text-slate-500">Insights</p>
           {message.insights?.map((insight) => (
-            <div key={insight.id || insight.title} className="rounded border border-white/10 bg-[#0f1623] p-2">
+            <button
+              key={insight.id || insight.title}
+              type="button"
+              onClick={() => onInsightSelected(insight)}
+              className={`w-full rounded border bg-[#0f1623] p-2 text-left ${activeInsightIds.includes(insight.id) ? 'border-cyan-400/70 bg-cyan-500/10' : 'border-white/10'}`}
+            >
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-medium text-white">{insight.title || 'Insight'}</span>
                 <Badge className={getInsightBadgeClass(insight.severity)}>{insight.severity}</Badge>
               </div>
               <p className="mt-1 text-xs text-slate-400">{insight.summary}</p>
-            </div>
+            </button>
           ))}
         </div>
       )}
@@ -1317,10 +1397,137 @@ export function buildOperationsWorkspacePreviewFilters(
       overdueOnly: filters.overdueOnly,
       waitingPartsOnly: filters.waitingPartsOnly,
     },
-    time_range: workspaceState.timeRange,
-    selected_workorder: selectedWorkorder?.workorder_no,
-    selected_machine: selectedWorkorder?.equipment_no,
+    time_range: workspaceState.synchronizedTimeRange?.value ?? workspaceState.timeRange,
+    selected_workorder: workspaceState.selectedWorkorderId ?? selectedWorkorder?.workorder_no,
+    selected_machine: workspaceState.selectedMachineId ?? selectedWorkorder?.equipment_no,
+    selected_insight: workspaceState.selectedInsightId,
+    focused_chart: workspaceState.focusedChartId,
+    highlighted_entities: workspaceState.highlightedEntities,
   };
+}
+
+function buildWorkorderSelectionAction(workorder: MaintenanceWorkOrder, source: 'table' | 'drawer'): UiAction {
+  return {
+    type: 'open_detail_panel',
+    target: 'workorder_drawer',
+    entity_id: workorder.workorder_no,
+    entity_ids: [workorder.workorder_no, workorder.equipment_no].filter(isNonEmptyText),
+    metadata: {
+      entity_type: 'workorder',
+      workorder_id: workorder.workorder_no,
+      machine_id: workorder.equipment_no,
+      source,
+    },
+    action_id: `local-${source}-selection-${workorder.workorder_no}-${Date.now()}`,
+  };
+}
+
+export function buildInsightSynchronizationActions(insight: Insight, workorders: MaintenanceWorkOrder[]) {
+  const relatedEntityIds = normalizeRelatedEntityIds(insight);
+  const chartId = getInsightChartId(insight);
+  const workorderToOpen = findRelatedWorkorder(relatedEntityIds, workorders);
+  const actions: UiAction[] = [
+    {
+      type: 'highlight_entities',
+      target: 'workorder_table',
+      entity_ids: relatedEntityIds,
+      metadata: {
+        insight_id: insight.id,
+        source: 'insight',
+      },
+      action_id: `local-insight-highlight-${insight.id}`,
+    },
+    {
+      type: 'focus_chart',
+      target: chartId,
+      entity_ids: relatedEntityIds,
+      metadata: {
+        insight_id: insight.id,
+        entity_ids: relatedEntityIds,
+      },
+      action_id: `local-insight-focus-${insight.id}`,
+    },
+  ];
+
+  if (workorderToOpen) {
+    actions.push({
+      type: 'open_detail_panel',
+      target: 'workorder_drawer',
+      entity_id: workorderToOpen.workorder_no,
+      entity_ids: [workorderToOpen.workorder_no, workorderToOpen.equipment_no].filter(isNonEmptyText),
+      metadata: {
+        insight_id: insight.id,
+        entity_type: 'workorder',
+        workorder_id: workorderToOpen.workorder_no,
+        machine_id: workorderToOpen.equipment_no,
+        source: 'insight',
+      },
+      action_id: `local-insight-open-${insight.id}`,
+    });
+  }
+
+  return { actions, workorderToOpen };
+}
+
+function getInsightChartId(insight: Insight) {
+  const metadataChart = getStringValue(
+    insight.metadata?.chart_id ??
+      insight.metadata?.chartId ??
+      insight.metadata?.focus_chart ??
+      insight.metadata?.target_chart,
+  );
+
+  if (metadataChart && isKnownOperationsWorkspaceTarget(metadataChart, 'focus_chart')) {
+    return metadataChart;
+  }
+
+  const type = insight.type.toLowerCase();
+  if (type.includes('delay') || type.includes('hold')) {
+    return 'delay_reasons_chart';
+  }
+  if (type.includes('history') || type.includes('part') || type.includes('stock')) {
+    return 'maintenance_history_signals';
+  }
+  if (type.includes('mttr') || type.includes('downtime')) {
+    return 'mttr_trend_chart';
+  }
+  return 'maintenance_frequency_chart';
+}
+
+function normalizeRelatedEntityIds(insight: Insight) {
+  const related = (insight.related_entities ?? []).map((entity) => entity.entity_id).filter(isNonEmptyText);
+  const metadataEntityIds = Array.isArray(insight.metadata?.entity_ids) ? insight.metadata.entity_ids.filter(isNonEmptyText) : [];
+  return uniqueStrings([...related, ...metadataEntityIds]);
+}
+
+function findRelatedWorkorder(entityIds: string[], workorders: MaintenanceWorkOrder[]) {
+  return workorders.find((workorder) => isWorkorderHighlighted(workorder, entityIds));
+}
+
+function getChartRelatedEntityIds(
+  chartId: string,
+  workorders: MaintenanceWorkOrder[],
+  repeatFailures: MaintenanceRiskMachine[],
+  stockRisk: MaintenanceRiskMachine[],
+) {
+  switch (chartId) {
+    case 'maintenance_frequency_chart':
+      return uniqueStrings([
+        ...workorders.map((workorder) => workorder.equipment_no).filter(isNonEmptyText),
+        ...repeatFailures.map((machine) => machine.equipment_no).filter(isNonEmptyText),
+      ]).slice(0, 8);
+    case 'maintenance_history_signals':
+      return uniqueStrings([
+        ...stockRisk.map((item) => item.equipment_no ?? item.catalogue_no).filter(isNonEmptyText),
+        ...workorders.filter((workorder) => workorder.part_transaction_count > 0).map((workorder) => workorder.workorder_no),
+      ]).slice(0, 8);
+    case 'mttr_trend_chart':
+      return uniqueStrings(workorders.map((workorder) => workorder.equipment_no).filter(isNonEmptyText)).slice(0, 8);
+    case 'delay_reasons_chart':
+      return uniqueStrings(workorders.filter((workorder) => isOnHold(workorder.status)).map((workorder) => workorder.workorder_no)).slice(0, 8);
+    default:
+      return [];
+  }
 }
 
 function applyHoyaUiAction(
@@ -1328,7 +1535,7 @@ function applyHoyaUiAction(
   context: {
     workorders: MaintenanceWorkOrder[];
     setFilters: Dispatch<SetStateAction<WorkorderFilters>>;
-    openWorkorderDrawer: (workorder: MaintenanceWorkOrder) => Promise<void>;
+    openWorkorderDrawer: (workorder: MaintenanceWorkOrder, synchronize?: boolean) => Promise<void>;
   },
 ): ActionResult {
   switch (action.type) {
@@ -1343,7 +1550,7 @@ function applyHoyaUiAction(
       if (!workorder) {
         return { action, status: 'ignored', reason: `Workorder '${action.entity_id}' is not in the current result set` };
       }
-      void context.openWorkorderDrawer(workorder);
+      void context.openWorkorderDrawer(workorder, false);
       return { action, status: 'applied' };
     }
     case 'focus_chart':
@@ -1445,8 +1652,31 @@ function isWorkorderHighlighted(workorder: MaintenanceWorkOrder, entityIds: stri
   ));
 }
 
+function isWorkorderSelected(workorder: MaintenanceWorkOrder, selectedWorkorderId?: string | null, selectedMachineId?: string | null) {
+  return Boolean(
+    (selectedWorkorderId && selectedWorkorderId === workorder.workorder_no) ||
+      (selectedMachineId && selectedMachineId === workorder.equipment_no),
+  );
+}
+
+function countHighlightedEntities(highlightedEntities: Record<string, string[]>) {
+  return uniqueStrings(Object.values(highlightedEntities).flat()).length;
+}
+
 function getStringFilter(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
+}
+
+function getStringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function isNonEmptyText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
 
 function truncateText(value: string, maxLength: number) {
@@ -1609,7 +1839,9 @@ function getActionResultBadgeClass(status: ActionResult['status'] | 'applied' | 
 }
 
 function formatWorkspaceLabel(value: string) {
-  return value.replace(/_/g, ' ');
+  return value
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function priorityRank(priority?: string) {
