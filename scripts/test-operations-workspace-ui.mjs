@@ -1,0 +1,164 @@
+import assert from 'node:assert/strict';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { createServer } from 'vite';
+
+process.env.VITE_APP_MODE = 'mock';
+process.env.VITE_AGENTIC_CORE_API_BASE_URL = 'http://agentic-core.test';
+process.env.VITE_MAINTENANCE_API_BASE_URL = 'http://maintenance-runtime.test';
+
+const server = await createServer({
+  appType: 'custom',
+  server: {
+    host: '127.0.0.1',
+    hmr: false,
+    middlewareMode: true,
+  },
+});
+
+try {
+  const contracts = await server.ssrLoadModule('/src/services/operationsWorkspaceContracts.ts');
+  const runtime = await server.ssrLoadModule('/src/services/operationsWorkspaceRuntime.ts');
+  const copilotApi = await server.ssrLoadModule('/src/services/operationsWorkspaceCopilotApi.ts');
+  const page = await server.ssrLoadModule('/src/pages/maintenance/MaintenanceWorkorderTrackingPage.tsx');
+
+  const contractResult = contracts.validateUiActions([
+    { type: 'set_filter', target: 'workorder_table', filters: { machine: 'POLISHING-7A' } },
+    { type: 'delete_workorder', target: 'maintenance_api', entity_id: 'WO-1' },
+    { type: 'open_detail_panel', target: 'workorder_drawer' },
+  ]);
+  assert.equal(contractResult.valid, false);
+  assert.equal(contractResult.accepted_actions.length, 1);
+  assert.match(contractResult.errors.join(' '), /writeback action type/);
+  assert.match(contractResult.errors.join(' '), /open_detail_panel requires entity_id/);
+
+  const runtimeState = runtime.applyUiActions(runtime.createInitialOperationsWorkspaceState(), [
+    { type: 'set_filter', target: 'workorder_table', filters: { status: 'open' } },
+    { type: 'focus_chart', target: 'maintenance_frequency_chart' },
+    { type: 'set_time_range', target: 'maintenance_dashboard', range: { value: 'last_7_days' } },
+    { type: 'highlight_entities', target: 'workorder_table', entity_ids: ['WO-1'] },
+    { type: 'sort_table', target: 'workorder_table', sort: { field: 'priority', direction: 'desc' } },
+    { type: 'update_workorder', target: 'maintenance_api', entity_id: 'WO-1' },
+  ]);
+  assert.deepEqual(runtimeState.filters.workorder_table, { status: 'open' });
+  assert.equal(runtimeState.focusedChartId, 'maintenance_frequency_chart');
+  assert.equal(runtimeState.timeRange, 'last_7_days');
+  assert.deepEqual(runtimeState.highlightedEntities.workorder_table, ['WO-1']);
+  assert.deepEqual(runtimeState.tableSorts.workorder_table, { field: 'priority', direction: 'desc' });
+  assert.equal(runtimeState.appliedActionHistory.at(-1).status, 'rejected');
+
+  const normalized = copilotApi.normalizeOperationsWorkspacePreviewResponse({
+    assistant_text: ' Focus maintenance risks. ',
+    insights: [
+      {
+        id: ' insight-1 ',
+        type: ' repeat_failure ',
+        severity: 'high',
+        title: ' Repeated failure detected ',
+        summary: ' POLISHING-7A has repeated workorders. ',
+      },
+    ],
+    ui_actions: [
+      { type: 'set_filter', target: 'workorder_table', filters: { equipment_no: 'POLISHING-7A' } },
+      { type: 'open_detail_panel', target: 'workorder_drawer' },
+    ],
+    source_tool_ids: ['tool-workorders'],
+  });
+  assert.equal(normalized.assistant_text, 'Focus maintenance risks.');
+  assert.equal(normalized.insights[0].title, 'Repeated failure detected');
+  assert.equal(normalized.ui_actions[0].valid, true);
+  assert.equal(normalized.ui_actions[1].valid, false);
+  assert.match(normalized.ui_actions[1].validation_errors[0], /open_detail_panel requires entity_id/);
+  assert.deepEqual(normalized.source_tool_ids, ['tool-workorders']);
+
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, init });
+    return new Response(JSON.stringify({
+      assistant_text: 'Preview ready.',
+      insights: [],
+      ui_actions: [],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  await copilotApi.requestOperationsWorkspacePreview({
+    message: 'show repeat failures',
+    filters: { workorder_table: { machine: 'POLISHING-7A' } },
+    limit: 3,
+  });
+  globalThis.fetch = originalFetch;
+  assert.equal(calls[0].url, 'http://agentic-core.test/api/operations-workspace/copilot/preview');
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    message: 'show repeat failures',
+    filters: { workorder_table: { machine: 'POLISHING-7A' } },
+    limit: 3,
+  });
+
+  const previewFilters = page.buildOperationsWorkspacePreviewFilters(
+    {
+      search: 'bearing',
+      status: 'open',
+      machine: 'POLISHING-7A',
+      workType: 'CM',
+      priority: 'High',
+      overdueOnly: true,
+      waitingPartsOnly: false,
+    },
+    runtimeState,
+    {
+      workorder_no: 'WO-1',
+      equipment_no: 'POLISHING-7A',
+      total_repair_time_hours: 1,
+      down_time_hours: 1,
+      task_count: 1,
+      part_transaction_count: 0,
+      issued_qty: 0,
+    },
+  );
+  assert.equal(previewFilters.workorder_table.machine, 'POLISHING-7A');
+  assert.equal(previewFilters.time_range, 'last_7_days');
+  assert.equal(previewFilters.selected_workorder, 'WO-1');
+
+  const assistantMarkup = renderToStaticMarkup(React.createElement(page.MaintenanceAssistantPanel, {
+    isOpen: true,
+    onClose: () => {},
+    messages: [{
+      id: 1,
+      role: 'assistant',
+      content: 'POLISHING-7A has the highest active maintenance risk.',
+      timestamp: '12:00',
+      insights: normalized.insights,
+      uiActions: normalized.ui_actions,
+      actionResults: [
+        { action: normalized.ui_actions[0], status: 'applied' },
+        { action: normalized.ui_actions[1], status: 'rejected', reason: normalized.ui_actions[1].validation_errors[0] },
+      ],
+    }],
+    inputMessage: '',
+    setInputMessage: () => {},
+    onSendMessage: () => {},
+    summary: {
+      open_workorder_count: 1,
+      overdue_workorder_count: 0,
+      on_hold_workorder_count: 0,
+      completed_workorder_count: 0,
+      total_downtime_hours: 0,
+      repeat_failure_candidate_count: 1,
+      stock_risk_item_count: 0,
+      mtbf_mttr: [],
+      top_risk_machines: [],
+      top_hold_reasons: [],
+    },
+    workspaceState: runtimeState,
+  }));
+  assert.match(assistantMarkup, /POLISHING-7A has the highest active maintenance risk/);
+  assert.match(assistantMarkup, /Repeated failure detected/);
+  assert.match(assistantMarkup, /set_filter - workorder_table/);
+  assert.match(assistantMarkup, /applied/);
+  assert.match(assistantMarkup, /open_detail_panel requires entity_id/);
+  assert.match(assistantMarkup, /Time range last_7_days/);
+} finally {
+  await server.close();
+}
+
+console.log('Operations workspace UI tests passed.');
