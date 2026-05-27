@@ -119,44 +119,98 @@ try {
   assert.equal(previewFilters.time_range, 'last_7_days');
   assert.equal(previewFilters.selected_workorder, 'WO-1');
 
-  const assistantMarkup = renderToStaticMarkup(React.createElement(page.MaintenanceAssistantPanel, {
+  const summary = {
+    open_workorder_count: 1,
+    overdue_workorder_count: 0,
+    on_hold_workorder_count: 0,
+    completed_workorder_count: 0,
+    total_downtime_hours: 0,
+    repeat_failure_candidate_count: 1,
+    stock_risk_item_count: 0,
+    mtbf_mttr: [],
+    top_risk_machines: [],
+    top_hold_reasons: [],
+  };
+  const staleTemplateText = 'Maintenance workorder visibility is online';
+  const staleFallbackText = 'Recommended next step is to clear overdue and parts-blocked jobs first';
+  const countOccurrences = (text, pattern) => (text.match(new RegExp(pattern, 'g')) ?? []).length;
+
+  const initialAssistantMarkup = renderToStaticMarkup(React.createElement(page.MaintenanceAssistantPanel, {
     isOpen: true,
     onClose: () => {},
-    messages: [{
-      id: 1,
-      role: 'assistant',
-      content: 'POLISHING-7A has the highest active maintenance risk.',
-      timestamp: '12:00',
-      insights: normalized.insights,
-      uiActions: normalized.ui_actions,
-      actionResults: [
-        { action: normalized.ui_actions[0], status: 'applied' },
-        { action: normalized.ui_actions[1], status: 'rejected', reason: normalized.ui_actions[1].validation_errors[0] },
-      ],
-    }],
+    messages: [],
     inputMessage: '',
     setInputMessage: () => {},
     onSendMessage: () => {},
-    summary: {
-      open_workorder_count: 1,
-      overdue_workorder_count: 0,
-      on_hold_workorder_count: 0,
-      completed_workorder_count: 0,
-      total_downtime_hours: 0,
-      repeat_failure_candidate_count: 1,
-      stock_risk_item_count: 0,
-      mtbf_mttr: [],
-      top_risk_machines: [],
-      top_hold_reasons: [],
-    },
+    summary,
     workspaceState: runtimeState,
   }));
+  assert.match(initialAssistantMarkup, /Quick Insights:/);
+  assert.match(initialAssistantMarkup, /Ask for maintenance blockers, repeat failures, parts risk, or actions for the selected workorder/);
+  assert.match(initialAssistantMarkup, /data-testid="maintenance-copilot-scroll-area"/);
+  assert.match(initialAssistantMarkup, /min-h-0 flex-1 overflow-hidden p-4/);
+  assert.doesNotMatch(initialAssistantMarkup, new RegExp(staleTemplateText));
+  assert.doesNotMatch(initialAssistantMarkup, new RegExp(staleFallbackText));
+
+  const assistantMarkup = renderToStaticMarkup(React.createElement(page.MaintenanceAssistantPanel, {
+    isOpen: true,
+    onClose: () => {},
+    messages: [
+      {
+        id: 1,
+        role: 'user',
+        content: 'Show maintenance risk for POLISHING-7A',
+        timestamp: '12:00',
+      },
+      {
+        id: 2,
+        role: 'assistant',
+        content: 'POLISHING-7A has the highest active maintenance risk.',
+        timestamp: '12:00',
+        insights: normalized.insights,
+        uiActions: normalized.ui_actions,
+        actionResults: [
+          { action: normalized.ui_actions[0], status: 'applied' },
+          { action: normalized.ui_actions[1], status: 'rejected', reason: normalized.ui_actions[1].validation_errors[0] },
+        ],
+      },
+    ],
+    inputMessage: '',
+    setInputMessage: () => {},
+    onSendMessage: () => {},
+    summary,
+    workspaceState: runtimeState,
+  }));
+  assert.equal(countOccurrences(assistantMarkup, 'Show maintenance risk for POLISHING-7A'), 1);
+  assert.equal(countOccurrences(assistantMarkup, 'POLISHING-7A has the highest active maintenance risk'), 1);
   assert.match(assistantMarkup, /POLISHING-7A has the highest active maintenance risk/);
   assert.match(assistantMarkup, /Repeated failure detected/);
   assert.match(assistantMarkup, /set_filter - workorder_table/);
   assert.match(assistantMarkup, /applied/);
   assert.match(assistantMarkup, /open_detail_panel requires entity_id/);
   assert.match(assistantMarkup, /Time range last_7_days/);
+  assert.doesNotMatch(assistantMarkup, new RegExp(staleTemplateText));
+  assert.doesNotMatch(assistantMarkup, new RegExp(staleFallbackText));
+
+  const repeatedPromptMarkup = renderToStaticMarkup(React.createElement(page.MaintenanceAssistantPanel, {
+    isOpen: true,
+    onClose: () => {},
+    messages: [
+      { id: 1, role: 'user', content: 'Which machines have repeat failures?', timestamp: '12:00' },
+      { id: 2, role: 'assistant', content: 'Preview response 1.', timestamp: '12:00' },
+      { id: 3, role: 'user', content: 'Which machines have repeat failures?', timestamp: '12:01' },
+      { id: 4, role: 'assistant', content: 'Preview response 2.', timestamp: '12:01' },
+    ],
+    inputMessage: '',
+    setInputMessage: () => {},
+    onSendMessage: () => {},
+    summary,
+    workspaceState: runtimeState,
+  }));
+  assert.equal(countOccurrences(repeatedPromptMarkup, 'Which machines have repeat failures\\?'), 2);
+  assert.equal(countOccurrences(repeatedPromptMarkup, 'Preview response'), 2);
+  assert.doesNotMatch(repeatedPromptMarkup, new RegExp(staleTemplateText));
+  assert.doesNotMatch(repeatedPromptMarkup, new RegExp(staleFallbackText));
 } finally {
   await server.close();
 }

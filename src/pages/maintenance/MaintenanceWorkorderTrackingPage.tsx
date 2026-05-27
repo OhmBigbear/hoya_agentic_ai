@@ -155,15 +155,7 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
   const [copilotError, setCopilotError] = useState<string | null>(null);
   const operationsWorkspace = useOperationsWorkspaceRuntime();
   const previewRequest = services.requestOperationsWorkspacePreview ?? requestOperationsWorkspacePreview;
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: 1,
-      role: 'assistant',
-      content:
-        'Maintenance workorder visibility is online. I can summarize open jobs, parts risk, repeat failure candidates, and likely blockers from the current API snapshot.',
-      timestamp: 'Now',
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -402,7 +394,7 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
         {
           id: current.length + 1,
           role: 'assistant',
-          content: `${buildAssistantResponse(trimmedMessage, summary, workorders, selectedWorkorder)}\n\nAgentic Core preview unavailable: ${errorMessage}`,
+          content: `Agentic Core preview unavailable: ${errorMessage}`,
           timestamp,
         },
       ]);
@@ -1090,7 +1082,7 @@ export function MaintenanceAssistantPanel({
       }`}
       aria-hidden={!isOpen}
     >
-      <div className="p-4 border-b border-white/10">
+      <div className="flex-shrink-0 p-4 border-b border-white/10">
         <div className="flex items-start justify-between gap-3 mb-3">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-cyan-500/20 rounded-lg">
@@ -1125,8 +1117,13 @@ export function MaintenanceAssistantPanel({
         </div>
       </div>
 
-      <ScrollArea className="flex-1 p-4">
+      <ScrollArea className="min-h-0 flex-1 overflow-hidden p-4" data-testid="maintenance-copilot-scroll-area" aria-label="Maintenance Copilot conversation">
         <div className="space-y-4">
+          {messages.length === 0 && (
+            <div className="rounded-lg border border-white/10 bg-[#141b2e] p-3 text-xs leading-relaxed text-slate-300" data-testid="maintenance-copilot-empty-state">
+              Ask for maintenance blockers, repeat failures, parts risk, or actions for the selected workorder.
+            </div>
+          )}
           {messages.map((message) => (
             <div key={message.id} className="flex gap-2">
               <div className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center ${message.role === 'user' ? 'bg-slate-700' : 'bg-cyan-500/20'}`}>
@@ -1158,7 +1155,7 @@ export function MaintenanceAssistantPanel({
         </div>
       </ScrollArea>
 
-      <div className="p-4 border-t border-white/10">
+      <div className="flex-shrink-0 p-4 border-t border-white/10">
         {copilotError && (
           <div className="mb-3 rounded border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-200">
             {copilotError}
@@ -1719,23 +1716,6 @@ function buildTimeline(workorder: MaintenanceWorkOrder, detail?: MaintenanceWork
     { label: 'Tasks Logged', value: `${detail?.tasks?.length ?? workorder.task_count ?? 0} tasks`, status: (detail?.tasks?.length ?? workorder.task_count ?? 0) > 0 ? 'completed' : 'pending' },
     { label: 'Work Finished', value: formatDateTime(workorder.act_work_end), status: workorder.act_work_end || isCompleted ? 'completed' : 'pending' },
   ] as Array<{ label: string; value: string; status: 'completed' | 'active' | 'pending' }>;
-}
-
-function buildAssistantResponse(message: string, summary: MaintenanceDashboardSummary, workorders: MaintenanceWorkOrder[], selectedWorkorder?: MaintenanceWorkOrder) {
-  const normalized = message.toLowerCase();
-  const selectedLine = selectedWorkorder
-    ? `\n\nSelected context: ${selectedWorkorder.workorder_no} on ${selectedWorkorder.equipment_no || 'unknown equipment'} is ${formatStatus(selectedWorkorder.status)} with ${formatHours(selectedWorkorder.down_time_hours)} downtime.`
-    : '';
-
-  if (normalized.includes('part') || normalized.includes('stock')) {
-    return `Parts risk summary: ${summary.stock_risk_item_count} stock risk items are reported by the runtime API. Prioritize open workorders with on-hold status and verify parts linked to high-priority equipment.${selectedLine}`;
-  }
-
-  if (normalized.includes('repeat') || normalized.includes('machine')) {
-    return `Repeat failure summary: ${summary.repeat_failure_candidate_count} candidate machines are flagged. Review machines with multiple open workorders or recurring failure descriptions before releasing repair capacity.${selectedLine}`;
-  }
-
-  return `Current maintenance summary: ${summary.open_workorder_count} open workorders, ${summary.overdue_workorder_count} overdue jobs, ${summary.on_hold_workorder_count} on-hold jobs, and ${workorders.length} workorder rows loaded. Recommended next step is to clear overdue and parts-blocked jobs first.${selectedLine}`;
 }
 
 function getProgress(workorder: MaintenanceWorkOrder) {

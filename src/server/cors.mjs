@@ -1,15 +1,22 @@
-const DEFAULT_CORS_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
+const DEFAULT_CORS_ORIGINS = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5174',
+];
 const CORS_METHODS = 'GET, OPTIONS';
 const CORS_DEFAULT_HEADERS = 'Content-Type, Authorization';
 const CORS_MAX_AGE_SECONDS = '86400';
 
 export function getAllowedCorsOrigins(env = process.env) {
-  if (!Object.hasOwn(env, 'MAINTENANCE_API_CORS_ORIGINS')) {
+  const rawOrigins = env.MAINTENANCE_API_ALLOWED_ORIGINS ?? env.MAINTENANCE_API_CORS_ORIGINS;
+
+  if (rawOrigins === undefined) {
     return DEFAULT_CORS_ORIGINS;
   }
 
-  return String(env.MAINTENANCE_API_CORS_ORIGINS)
-    .split(/[,\s]+/)
+  return String(rawOrigins)
+    .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
 }
@@ -21,7 +28,7 @@ export function createCorsHandler(handler, options = {}) {
     const url = new URL(request.url, 'http://localhost');
     const corsHeaders = getCorsHeaders(request, allowedOrigins);
 
-    if (url.pathname.startsWith('/api/')) {
+    if (isCorsApiPath(url.pathname)) {
       const originalWriteHead = response.writeHead.bind(response);
       response.writeHead = (statusCode, statusMessageOrHeaders = {}, maybeHeaders = {}) => {
         if (typeof statusMessageOrHeaders === 'string') {
@@ -38,7 +45,7 @@ export function createCorsHandler(handler, options = {}) {
       };
     }
 
-    if (request.method === 'OPTIONS' && url.pathname.startsWith('/api/')) {
+    if (request.method === 'OPTIONS' && isCorsApiPath(url.pathname)) {
       response.writeHead(204, corsHeaders);
       response.end();
       return;
@@ -46,6 +53,10 @@ export function createCorsHandler(handler, options = {}) {
 
     return handler(request, response);
   };
+}
+
+function isCorsApiPath(pathname) {
+  return pathname === '/api/health' || pathname.startsWith('/api/maintenance/');
 }
 
 function getCorsHeaders(request, allowedOrigins) {
@@ -69,10 +80,6 @@ function getCorsHeaders(request, allowedOrigins) {
 function resolveAllowOrigin(requestOrigin, allowedOrigins) {
   if (!requestOrigin) {
     return null;
-  }
-
-  if (allowedOrigins.includes('*')) {
-    return '*';
   }
 
   if (allowedOrigins.includes(requestOrigin)) {
