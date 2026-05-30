@@ -7,6 +7,7 @@ import type {
   UiActionPreview,
 } from '../types/operationsWorkspace';
 import { validateUiActions } from './operationsWorkspaceContracts';
+import { normalizeWorkspacePayload } from './operationsWorkspaceRuntime';
 
 export async function requestOperationsWorkspacePreview(
   request: OperationsWorkspacePreviewRequest,
@@ -42,6 +43,9 @@ export function normalizeOperationsWorkspacePreviewResponse(payload: unknown): O
     assistant_text: getString(record.assistant_text).trim(),
     insights: Array.isArray(record.insights) ? record.insights.map(normalizeInsight) : [],
     ui_actions: actions,
+    workspace_payload: normalizeWorkspacePayload(record.workspace_payload),
+    trace: getOptionalRecord(record.trace),
+    metadata: getOptionalRecord(record.metadata),
     trace_id: getString(record.trace_id) || undefined,
     generated_by_agent_id: getString(record.generated_by_agent_id) || undefined,
     source_tool_ids: getStringArray(record.source_tool_ids),

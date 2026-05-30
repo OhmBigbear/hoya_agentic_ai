@@ -65,6 +65,9 @@ export interface CopilotStructuredResponse extends TraceAuditMetadata {
   assistant_text: string;
   insights: Insight[];
   ui_actions: UiAction[];
+  workspace_payload?: WorkspacePayload;
+  trace?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface OperationsWorkspacePreviewRequest {
@@ -75,6 +78,90 @@ export interface OperationsWorkspacePreviewRequest {
 
 export interface OperationsWorkspacePreviewResponse extends Omit<CopilotStructuredResponse, 'ui_actions'> {
   ui_actions: UiActionPreview[];
+}
+
+export type WorkspacePayloadConfidence = 'low' | 'medium' | 'high';
+export type WorkspacePayloadSeverity = 'normal' | 'warning' | 'critical' | 'unknown';
+export type WorkspacePayloadTrend = 'up' | 'down' | 'flat' | 'unknown';
+export type WorkspacePayloadChartType = 'bar' | 'line' | 'donut' | 'table';
+export type WorkspacePayloadPriority = 'low' | 'medium' | 'high';
+export type WorkspacePayloadEvidenceSource = 'tool' | 'api' | 'dataset' | 'agent' | 'system';
+export type WorkspacePayloadActionType = 'open_trace' | 'open_detail' | 'apply_filter';
+
+export interface WorkspacePayloadTimeRange {
+  from?: string;
+  to?: string;
+  timezone?: string;
+  label?: string;
+}
+
+export interface WorkspacePayloadSummary {
+  title: string;
+  headline: string;
+  confidence: WorkspacePayloadConfidence;
+  severity: WorkspacePayloadSeverity;
+  time_range?: WorkspacePayloadTimeRange | null;
+  limitations: string[];
+}
+
+export interface WorkspacePayloadKpiCard {
+  id: string;
+  label: string;
+  value: string | number;
+  unit?: string;
+  trend: WorkspacePayloadTrend;
+  severity: WorkspacePayloadSeverity;
+  description?: string;
+}
+
+export interface WorkspacePayloadChart {
+  id: string;
+  type: WorkspacePayloadChartType;
+  title: string;
+  description?: string;
+  x_key?: string;
+  y_key?: string;
+  data: Record<string, unknown>[];
+}
+
+export interface WorkspacePayloadRecommendation {
+  id: string;
+  priority: WorkspacePayloadPriority;
+  title: string;
+  rationale: string;
+  suggested_action: string;
+  requires_human_decision: true;
+  related_refs: string[];
+}
+
+export interface WorkspacePayloadEvidence {
+  source_type: WorkspacePayloadEvidenceSource;
+  source_name: string;
+  reference?: string;
+  timestamp?: string;
+  description?: string;
+}
+
+export interface WorkspacePayloadAction {
+  id: string;
+  label: string;
+  action_type: WorkspacePayloadActionType;
+  target?: string;
+  enabled: boolean;
+}
+
+export interface WorkspacePayload {
+  payload_version: '1.0';
+  payload_type: 'workorder_insight';
+  intent: 'workorder_insight';
+  generated_at?: string;
+  summary: WorkspacePayloadSummary;
+  kpi_cards: WorkspacePayloadKpiCard[];
+  charts: WorkspacePayloadChart[];
+  recommendations: WorkspacePayloadRecommendation[];
+  evidence: WorkspacePayloadEvidence[];
+  actions: WorkspacePayloadAction[];
+  filters?: Record<string, unknown>;
 }
 
 export interface DashboardStatePatch extends TraceAuditMetadata {

@@ -71,6 +71,111 @@ try {
   assert.match(normalized.ui_actions[1].validation_errors[0], /open_detail_panel requires entity_id/);
   assert.deepEqual(normalized.source_tool_ids, ['tool-workorders']);
 
+  const normalizedWithPayload = copilotApi.normalizeOperationsWorkspacePreviewResponse({
+    assistant_text: 'Structured workspace payload ready.',
+    insights: normalized.insights,
+    ui_actions: normalized.ui_actions,
+    trace: { trace_id: 'trace-021' },
+    metadata: { response_source: 'agent' },
+    workspace_payload: {
+      payload_version: '1.0',
+      payload_type: 'workorder_insight',
+      intent: 'workorder_insight',
+      generated_at: '2026-05-30T08:30:00Z',
+      summary: {
+        title: 'Work Order Risk Summary',
+        headline: '18 open work orders found, with 5 requiring attention.',
+        confidence: 'medium',
+        severity: 'warning',
+        limitations: ['Recommendation is based on readonly Work Order records only.'],
+      },
+      kpi_cards: [
+        {
+          id: 'open_workorders',
+          label: 'Open Work Orders',
+          value: 18,
+          unit: 'orders',
+          trend: 'unknown',
+          severity: 'warning',
+          description: 'Open work orders in the current selected period.',
+        },
+      ],
+      charts: [
+        {
+          id: 'status_distribution',
+          type: 'table',
+          title: 'Status Distribution',
+          x_key: 'status',
+          y_key: 'count',
+          data: [{ status: 'open', count: 18 }],
+        },
+      ],
+      recommendations: [
+        {
+          id: 'rec_review_aging',
+          priority: 'high',
+          title: 'Review aging work orders',
+          rationale: 'Aging work orders are concentrated in the current view.',
+          suggested_action: 'Ask the shift leader to review blockers before handover.',
+          requires_human_decision: true,
+          related_refs: [],
+        },
+      ],
+      evidence: [
+        {
+          source_type: 'tool',
+          source_name: 'workorder_get_summary',
+          description: 'Readonly Work Order summary tool result.',
+        },
+      ],
+    },
+  });
+  assert.equal(normalizedWithPayload.workspace_payload.summary.title, 'Work Order Risk Summary');
+  assert.equal(normalizedWithPayload.workspace_payload.kpi_cards[0].label, 'Open Work Orders');
+  assert.equal(normalizedWithPayload.workspace_payload.recommendations[0].title, 'Review aging work orders');
+  assert.deepEqual(normalizedWithPayload.trace, { trace_id: 'trace-021' });
+  assert.deepEqual(normalizedWithPayload.metadata, { response_source: 'agent' });
+
+  const invalidPayloadResponse = copilotApi.normalizeOperationsWorkspacePreviewResponse({
+    assistant_text: 'Chat response still visible.',
+    insights: normalized.insights,
+    ui_actions: normalized.ui_actions,
+    workspace_payload: {
+      payload_version: '2.0',
+      payload_type: 'workorder_insight',
+      intent: 'workorder_insight',
+      summary: {
+        title: 'Unsupported payload',
+        headline: 'This should not render.',
+        confidence: 'medium',
+        severity: 'warning',
+        limitations: [],
+      },
+    },
+  });
+  assert.equal(invalidPayloadResponse.workspace_payload, undefined);
+
+  const payloadActions = runtime.buildActionsFromWorkspacePayload({
+    ...normalizedWithPayload.workspace_payload,
+    filters: { equipment_no: 'POLISHING-7A' },
+    actions: [
+      {
+        id: 'filter-machine',
+        label: 'Filter machine',
+        action_type: 'apply_filter',
+        target: 'workorder_table',
+        enabled: true,
+      },
+    ],
+  });
+  assert.deepEqual(payloadActions[0], {
+    type: 'set_filter',
+    target: 'workorder_table',
+    filters: { equipment_no: 'POLISHING-7A' },
+    action_id: 'filter-machine',
+    metadata: { source: 'workspace_payload', label: 'Filter machine' },
+  });
+
   const originalFetch = globalThis.fetch;
   const calls = [];
   globalThis.fetch = async (url, init) => {
@@ -191,6 +296,65 @@ try {
   assert.match(assistantMarkup, /Time range last_7_days/);
   assert.doesNotMatch(assistantMarkup, new RegExp(staleTemplateText));
   assert.doesNotMatch(assistantMarkup, new RegExp(staleFallbackText));
+
+  const payloadMarkup = renderToStaticMarkup(React.createElement(page.MaintenanceAssistantPanel, {
+    isOpen: true,
+    onClose: () => {},
+    messages: [
+      {
+        id: 1,
+        role: 'assistant',
+        content: normalizedWithPayload.assistant_text,
+        timestamp: '12:00',
+        insights: normalizedWithPayload.insights,
+        uiActions: normalizedWithPayload.ui_actions,
+        workspacePayload: normalizedWithPayload.workspace_payload,
+      },
+    ],
+    inputMessage: '',
+    setInputMessage: () => {},
+    onSendMessage: () => {},
+    summary,
+    workspaceState: runtimeState,
+  }));
+  assert.match(payloadMarkup, /data-testid="workspace-payload-section"/);
+  assert.match(payloadMarkup, /Work Order Risk Summary/);
+  assert.match(payloadMarkup, /18 open work orders found/);
+  assert.match(payloadMarkup, /Open Work Orders/);
+  assert.match(payloadMarkup, /18/);
+  assert.match(payloadMarkup, /Status Distribution/);
+  assert.match(payloadMarkup, /Review aging work orders/);
+  assert.match(payloadMarkup, /Ask the shift leader to review blockers before handover/);
+  assert.match(payloadMarkup, /workorder_get_summary/);
+  assert.match(payloadMarkup, /Readonly Work Order summary tool result/);
+  assert.match(payloadMarkup, /Recommendation is based on readonly Work Order records only/);
+  assert.match(payloadMarkup, /Repeated failure detected/);
+  assert.match(payloadMarkup, /set_filter - workorder_table/);
+
+  const invalidPayloadMarkup = renderToStaticMarkup(React.createElement(page.MaintenanceAssistantPanel, {
+    isOpen: true,
+    onClose: () => {},
+    messages: [
+      {
+        id: 1,
+        role: 'assistant',
+        content: invalidPayloadResponse.assistant_text,
+        timestamp: '12:00',
+        insights: invalidPayloadResponse.insights,
+        uiActions: invalidPayloadResponse.ui_actions,
+        workspacePayload: invalidPayloadResponse.workspace_payload,
+      },
+    ],
+    inputMessage: '',
+    setInputMessage: () => {},
+    onSendMessage: () => {},
+    summary,
+    workspaceState: runtimeState,
+  }));
+  assert.match(invalidPayloadMarkup, /Chat response still visible/);
+  assert.doesNotMatch(invalidPayloadMarkup, /workspace-payload-section/);
+  assert.match(invalidPayloadMarkup, /Repeated failure detected/);
+  assert.match(invalidPayloadMarkup, /set_filter - workorder_table/);
 
   const repeatedPromptMarkup = renderToStaticMarkup(React.createElement(page.MaintenanceAssistantPanel, {
     isOpen: true,

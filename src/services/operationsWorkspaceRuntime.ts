@@ -9,6 +9,17 @@ import type {
   UiAction,
   UiActionType,
   VisualizationFocusTarget,
+  WorkspacePayload,
+  WorkspacePayloadAction,
+  WorkspacePayloadChart,
+  WorkspacePayloadConfidence,
+  WorkspacePayloadEvidence,
+  WorkspacePayloadKpiCard,
+  WorkspacePayloadPriority,
+  WorkspacePayloadRecommendation,
+  WorkspacePayloadSeverity,
+  WorkspacePayloadSummary,
+  WorkspacePayloadTrend,
 } from '../types/operationsWorkspace';
 import { isSupportedUiActionType } from './operationsWorkspaceContracts';
 
@@ -258,11 +269,84 @@ export function normalizeCopilotStructuredResponse(response: Partial<CopilotStru
     assistant_text: String(response.assistant_text ?? '').trim(),
     insights: Array.isArray(response.insights) ? response.insights.map(normalizeInsight) : [],
     ui_actions: Array.isArray(response.ui_actions) ? response.ui_actions.map(normalizeAction) : [],
+    workspace_payload: normalizeWorkspacePayload(response.workspace_payload),
+    trace: isRecord(response.trace) ? { ...response.trace } : undefined,
+    metadata: isRecord(response.metadata) ? { ...response.metadata } : undefined,
     trace_id: response.trace_id,
     generated_by_agent_id: response.generated_by_agent_id,
     source_tool_ids: response.source_tool_ids ?? [],
     confidence: response.confidence,
     created_at: response.created_at,
+  };
+}
+
+export function applyWorkspacePayload(state: OperationsWorkspaceState, payload: WorkspacePayload | undefined): OperationsWorkspaceState {
+  const actions = buildActionsFromWorkspacePayload(payload);
+  return actions.length > 0 ? applyUiActions(state, actions) : state;
+}
+
+export function buildActionsFromWorkspacePayload(payload: WorkspacePayload | undefined): UiAction[] {
+  if (!payload) {
+    return [];
+  }
+
+  return payload.actions
+    .filter((action) => action.enabled)
+    .map((action): UiAction | null => {
+      if (action.action_type === 'apply_filter') {
+        return {
+          type: 'set_filter',
+          target: action.target || 'workorder_table',
+          filters: payload.filters ?? {},
+          action_id: action.id,
+          metadata: { source: 'workspace_payload', label: action.label },
+        };
+      }
+      if (action.action_type === 'open_detail' && action.target) {
+        return {
+          type: 'open_detail_panel',
+          target: 'workorder_drawer',
+          entity_id: action.target,
+          action_id: action.id,
+          metadata: { source: 'workspace_payload', label: action.label, entity_type: 'workorder' },
+        };
+      }
+      return null;
+    })
+    .filter((action): action is UiAction => action !== null);
+}
+
+export function normalizeWorkspacePayload(value: unknown): WorkspacePayload | undefined {
+  const record = getRecord(value);
+  if (Object.keys(record).length === 0) {
+    return undefined;
+  }
+
+  if (
+    getText(record.payload_version) !== '1.0' ||
+    getText(record.payload_type) !== 'workorder_insight' ||
+    getText(record.intent) !== 'workorder_insight'
+  ) {
+    return undefined;
+  }
+
+  const summary = normalizeWorkspaceSummary(record.summary);
+  if (!summary) {
+    return undefined;
+  }
+
+  return {
+    payload_version: '1.0',
+    payload_type: 'workorder_insight',
+    intent: 'workorder_insight',
+    generated_at: getText(record.generated_at) ?? undefined,
+    summary,
+    kpi_cards: normalizeWorkspaceArray(record.kpi_cards, normalizeWorkspaceKpiCard),
+    charts: normalizeWorkspaceArray(record.charts, normalizeWorkspaceChart),
+    recommendations: normalizeWorkspaceArray(record.recommendations, normalizeWorkspaceRecommendation),
+    evidence: normalizeWorkspaceArray(record.evidence, normalizeWorkspaceEvidence),
+    actions: normalizeWorkspaceArray(record.actions, normalizeWorkspaceAction),
+    filters: isRecord(record.filters) ? { ...record.filters } : undefined,
   };
 }
 
@@ -411,6 +495,180 @@ function normalizeInsight(insight: Insight): Insight {
   };
 }
 
+function normalizeWorkspaceSummary(value: unknown): WorkspacePayloadSummary | undefined {
+  const record = getRecord(value);
+  const title = getText(record.title);
+  const headline = getText(record.headline);
+  const confidence = normalizeWorkspaceConfidence(record.confidence);
+  const severity = normalizeWorkspaceSeverity(record.severity);
+
+  if (!title || !headline || !confidence || !severity) {
+    return undefined;
+  }
+
+  return {
+    title,
+    headline,
+    confidence,
+    severity,
+    time_range: normalizeWorkspaceTimeRange(record.time_range),
+    limitations: normalizeTextArray(record.limitations),
+  };
+}
+
+function normalizeWorkspaceKpiCard(value: unknown): WorkspacePayloadKpiCard | null {
+  const record = getRecord(value);
+  const id = getText(record.id);
+  const label = getText(record.label);
+  const cardValue = typeof record.value === 'number' || typeof record.value === 'string' ? record.value : undefined;
+  const trend = normalizeWorkspaceTrend(record.trend) ?? 'unknown';
+  const severity = normalizeWorkspaceSeverity(record.severity) ?? 'unknown';
+
+  if (!id || !label || cardValue === undefined) {
+    return null;
+  }
+
+  return {
+    id,
+    label,
+    value: typeof cardValue === 'string' ? cardValue.trim() : cardValue,
+    unit: getText(record.unit) ?? undefined,
+    trend,
+    severity,
+    description: getText(record.description) ?? undefined,
+  };
+}
+
+function normalizeWorkspaceChart(value: unknown): WorkspacePayloadChart | null {
+  const record = getRecord(value);
+  const id = getText(record.id);
+  const title = getText(record.title);
+  const type = normalizeWorkspaceChartType(record.type);
+
+  if (!id || !title || !type) {
+    return null;
+  }
+
+  return {
+    id,
+    type,
+    title,
+    description: getText(record.description) ?? undefined,
+    x_key: getText(record.x_key) ?? undefined,
+    y_key: getText(record.y_key) ?? undefined,
+    data: Array.isArray(record.data) ? record.data.map(getRecord).filter((row) => Object.keys(row).length > 0) : [],
+  };
+}
+
+function normalizeWorkspaceRecommendation(value: unknown): WorkspacePayloadRecommendation | null {
+  const record = getRecord(value);
+  const id = getText(record.id);
+  const title = getText(record.title);
+  const rationale = getText(record.rationale);
+  const suggestedAction = getText(record.suggested_action);
+  const priority = normalizeWorkspacePriority(record.priority) ?? 'medium';
+
+  if (!id || !title || !rationale || !suggestedAction || record.requires_human_decision !== true) {
+    return null;
+  }
+
+  return {
+    id,
+    priority,
+    title,
+    rationale,
+    suggested_action: suggestedAction,
+    requires_human_decision: true,
+    related_refs: normalizeTextArray(record.related_refs),
+  };
+}
+
+function normalizeWorkspaceEvidence(value: unknown): WorkspacePayloadEvidence | null {
+  const record = getRecord(value);
+  const sourceType = normalizeWorkspaceEvidenceSource(record.source_type);
+  const sourceName = getText(record.source_name);
+
+  if (!sourceType || !sourceName) {
+    return null;
+  }
+
+  return {
+    source_type: sourceType,
+    source_name: sourceName,
+    reference: getText(record.reference) ?? undefined,
+    timestamp: getText(record.timestamp) ?? undefined,
+    description: getText(record.description) ?? undefined,
+  };
+}
+
+function normalizeWorkspaceAction(value: unknown): WorkspacePayloadAction | null {
+  const record = getRecord(value);
+  const id = getText(record.id);
+  const label = getText(record.label);
+  const actionType = normalizeWorkspaceActionType(record.action_type);
+
+  if (!id || !label || !actionType || isWritebackLikeActionType(actionType)) {
+    return null;
+  }
+
+  return {
+    id,
+    label,
+    action_type: actionType,
+    target: getText(record.target) ?? undefined,
+    enabled: record.enabled === true,
+  };
+}
+
+function normalizeWorkspaceTimeRange(value: unknown): WorkspacePayloadSummary['time_range'] {
+  const record = getRecord(value);
+  if (Object.keys(record).length === 0) {
+    return null;
+  }
+  return {
+    from: getText(record.from) ?? undefined,
+    to: getText(record.to) ?? undefined,
+    timezone: getText(record.timezone) ?? undefined,
+    label: getText(record.label) ?? undefined,
+  };
+}
+
+function normalizeWorkspaceArray<T>(value: unknown, normalizeItem: (item: unknown) => T | null): T[] {
+  return Array.isArray(value) ? value.map(normalizeItem).filter((item): item is T => item !== null) : [];
+}
+
+function normalizeWorkspaceConfidence(value: unknown): WorkspacePayloadConfidence | null {
+  return value === 'low' || value === 'medium' || value === 'high' ? value : null;
+}
+
+function normalizeWorkspaceSeverity(value: unknown): WorkspacePayloadSeverity | null {
+  return value === 'normal' || value === 'warning' || value === 'critical' || value === 'unknown' ? value : null;
+}
+
+function normalizeWorkspaceTrend(value: unknown): WorkspacePayloadTrend | null {
+  return value === 'up' || value === 'down' || value === 'flat' || value === 'unknown' ? value : null;
+}
+
+function normalizeWorkspaceChartType(value: unknown): WorkspacePayloadChart['type'] | null {
+  return value === 'bar' || value === 'line' || value === 'donut' || value === 'table' ? value : null;
+}
+
+function normalizeWorkspacePriority(value: unknown): WorkspacePayloadPriority | null {
+  return value === 'low' || value === 'medium' || value === 'high' ? value : null;
+}
+
+function normalizeWorkspaceEvidenceSource(value: unknown): WorkspacePayloadEvidence['source_type'] | null {
+  return value === 'tool' || value === 'api' || value === 'dataset' || value === 'agent' || value === 'system' ? value : null;
+}
+
+function normalizeWorkspaceActionType(value: unknown): WorkspacePayloadAction['action_type'] | null {
+  return value === 'open_trace' || value === 'open_detail' || value === 'apply_filter' ? value : null;
+}
+
+function normalizeTextArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter(isNonEmptyText).map((item) => item.trim()) : [];
+}
+
 function normalizeTimeRange(range: UiAction['range']): string | null {
   if (!range) {
     return null;
@@ -525,6 +783,10 @@ function isWritebackLikeActionType(type: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function getRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
 }
 
 function isNonEmptyText(value: unknown): value is string {

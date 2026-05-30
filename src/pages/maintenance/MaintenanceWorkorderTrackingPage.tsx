@@ -63,6 +63,8 @@ import type {
   OperationsWorkspacePreviewResponse,
   UiAction,
   UiActionPreview,
+  WorkspacePayload,
+  WorkspacePayloadChart,
 } from '../../types/operationsWorkspace';
 
 interface MaintenanceWorkorderTrackingPageProps {
@@ -89,6 +91,7 @@ interface ChatMessage {
   timestamp: string;
   insights?: Insight[];
   uiActions?: UiActionPreview[];
+  workspacePayload?: WorkspacePayload;
   actionResults?: ActionResult[];
 }
 
@@ -383,6 +386,7 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
           timestamp,
           insights: preview.insights,
           uiActions: preview.ui_actions,
+          workspacePayload: preview.workspace_payload,
           actionResults,
         },
       ]);
@@ -1227,13 +1231,15 @@ function AssistantStructuredBlocks({
 }) {
   const hasInsights = Boolean(message.insights?.length);
   const hasActions = Boolean(message.uiActions?.length);
+  const hasWorkspacePayload = Boolean(message.workspacePayload);
 
-  if (!hasInsights && !hasActions) {
+  if (!hasInsights && !hasActions && !hasWorkspacePayload) {
     return null;
   }
 
   return (
     <div className="mt-3 space-y-3 border-t border-white/10 pt-3">
+      {message.workspacePayload && <WorkspacePayloadInsight payload={message.workspacePayload} />}
       {hasInsights && (
         <div className="space-y-2">
           <p className="text-[11px] uppercase text-slate-500">Insights</p>
@@ -1271,6 +1277,123 @@ function AssistantStructuredBlocks({
             );
           })}
         </div>
+      )}
+    </div>
+  );
+}
+
+function WorkspacePayloadInsight({ payload }: { payload: WorkspacePayload }) {
+  const { summary } = payload;
+
+  return (
+    <div className="space-y-3" data-testid="workspace-payload-section">
+      <div className="rounded border border-cyan-400/20 bg-[#0f1623] p-2">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-[11px] uppercase text-cyan-300/80">Workspace Insight</p>
+            <h4 className="mt-1 text-xs font-semibold text-white">{summary.title}</h4>
+          </div>
+          <div className="flex flex-shrink-0 gap-1">
+            <Badge className={getWorkspacePayloadSeverityBadgeClass(summary.severity)}>{summary.severity}</Badge>
+            <Badge className="bg-slate-700/70 text-slate-200 border-slate-500/30">{summary.confidence}</Badge>
+          </div>
+        </div>
+        <p className="mt-2 text-xs leading-relaxed text-slate-300">{summary.headline}</p>
+        {summary.time_range?.label && <p className="mt-1 text-[11px] text-slate-500">{summary.time_range.label}</p>}
+      </div>
+
+      {payload.kpi_cards.length > 0 && (
+        <div className="grid grid-cols-2 gap-2">
+          {payload.kpi_cards.map((card) => (
+            <div key={card.id} className="rounded border border-white/10 bg-[#0f1623] p-2">
+              <p className="text-[11px] text-slate-500">{card.label}</p>
+              <div className="mt-1 flex items-baseline gap-1">
+                <span className="text-base font-semibold text-white">{card.value}</span>
+                {card.unit && <span className="text-[11px] text-slate-400">{card.unit}</span>}
+              </div>
+              {card.description && <p className="mt-1 text-[11px] leading-snug text-slate-500">{card.description}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {payload.charts.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-[11px] uppercase text-slate-500">Charts / Tables</p>
+          {payload.charts.map((chart) => (
+            <WorkspacePayloadChartBlock key={chart.id} chart={chart} />
+          ))}
+        </div>
+      )}
+
+      {payload.recommendations.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-[11px] uppercase text-slate-500">Recommendations</p>
+          {payload.recommendations.map((recommendation) => (
+            <div key={recommendation.id} className="rounded border border-white/10 bg-[#0f1623] p-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium text-white">{recommendation.title}</span>
+                <Badge className={getRecommendationBadgeClass(recommendation.priority)}>{recommendation.priority}</Badge>
+              </div>
+              <p className="mt-1 text-xs text-slate-400">{recommendation.rationale}</p>
+              <p className="mt-1 text-xs text-slate-300">{recommendation.suggested_action}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {payload.evidence.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-[11px] uppercase text-slate-500">Evidence</p>
+          {payload.evidence.map((item, index) => (
+            <div key={`${item.source_name}-${index}`} className="rounded border border-white/10 bg-[#0f1623] p-2">
+              <p className="text-xs font-medium text-slate-200">{item.source_name}</p>
+              {item.description && <p className="mt-1 text-xs text-slate-400">{item.description}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {summary.limitations.length > 0 && (
+        <div className="rounded border border-amber-500/20 bg-amber-500/10 p-2">
+          <p className="text-[11px] uppercase text-amber-200/80">Limitations</p>
+          <ul className="mt-1 space-y-1">
+            {summary.limitations.map((limitation, index) => (
+              <li key={`${limitation}-${index}`} className="text-xs text-amber-100/80">{limitation}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WorkspacePayloadChartBlock({ chart }: { chart: WorkspacePayloadChart }) {
+  const rows = chart.data.slice(0, 5);
+  const columns = getWorkspacePayloadChartColumns(chart, rows);
+
+  return (
+    <div className="rounded border border-white/10 bg-[#0f1623] p-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-medium text-white">{chart.title}</span>
+        <Badge className="bg-slate-700/70 text-slate-200 border-slate-500/30">{chart.type}</Badge>
+      </div>
+      {chart.description && <p className="mt-1 text-[11px] text-slate-500">{chart.description}</p>}
+      {rows.length > 0 && columns.length > 0 ? (
+        <div className="mt-2 overflow-hidden rounded border border-white/10">
+          {rows.map((row, rowIndex) => (
+            <div key={`${chart.id}-${rowIndex}`} className="grid grid-cols-2 gap-2 border-t border-white/5 px-2 py-1 first:border-t-0">
+              {columns.map((column) => (
+                <div key={column} className="min-w-0">
+                  <span className="block truncate text-[10px] uppercase text-slate-500">{formatWorkspaceLabel(column)}</span>
+                  <span className="block truncate text-xs text-slate-300">{formatWorkspaceValue(row[column])}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-2 text-xs text-slate-500">No chart rows returned.</p>
       )}
     </div>
   );
@@ -1808,6 +1931,29 @@ function getInsightBadgeClass(severity?: string) {
   return 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30 text-[10px]';
 }
 
+function getWorkspacePayloadSeverityBadgeClass(severity?: string) {
+  if (severity === 'critical') {
+    return 'bg-red-500/20 text-red-300 border-red-500/30 text-[10px]';
+  }
+  if (severity === 'warning') {
+    return 'bg-orange-500/20 text-orange-300 border-orange-500/30 text-[10px]';
+  }
+  if (severity === 'normal') {
+    return 'bg-green-500/20 text-green-300 border-green-500/30 text-[10px]';
+  }
+  return 'bg-slate-500/20 text-slate-300 border-slate-500/30 text-[10px]';
+}
+
+function getRecommendationBadgeClass(priority?: string) {
+  if (priority === 'high') {
+    return 'bg-orange-500/20 text-orange-300 border-orange-500/30 text-[10px]';
+  }
+  if (priority === 'low') {
+    return 'bg-green-500/20 text-green-300 border-green-500/30 text-[10px]';
+  }
+  return 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30 text-[10px]';
+}
+
 function getActionResultBadgeClass(status: ActionResult['status'] | 'applied' | 'valid') {
   if (status === 'applied' || status === 'valid') {
     return 'bg-green-500/20 text-green-300 border-green-500/30 text-[10px]';
@@ -1822,6 +1968,25 @@ function formatWorkspaceLabel(value: string) {
   return value
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function getWorkspacePayloadChartColumns(chart: WorkspacePayloadChart, rows: Record<string, unknown>[]) {
+  const preferred = [chart.x_key, chart.y_key].filter(isNonEmptyText);
+  const discovered = rows.flatMap((row) => Object.keys(row));
+  return uniqueStrings([...preferred, ...discovered]).slice(0, 4);
+}
+
+function formatWorkspaceValue(value: unknown) {
+  if (value === null || value === undefined) {
+    return '-';
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  return JSON.stringify(value);
 }
 
 function priorityRank(priority?: string) {
