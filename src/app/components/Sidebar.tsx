@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import {
   LayoutDashboard,
   Factory,
@@ -12,6 +11,7 @@ import {
   ChevronRight,
   Activity,
   Package,
+  Boxes,
   TrendingUp,
   Users,
   AlertCircle,
@@ -53,8 +53,9 @@ const menuGroups: MenuGroup[] = [
   {
     title: 'Maintenance',
     items: [
-      { label: 'Station Maintenance Tracking', icon: Package, href: '#station-maintenance-tracking' },
+      { label: 'Station Maintenance Tracking', icon: Package, href: '/maintenance/workorders' },
       { label: 'Station Maintenance Analysis', icon: TrendingUp, href: '#station-maintenance-analysis' },
+      { label: 'Cost & Spare Parts', icon: Boxes, href: '#maintenance-cost-spare-parts' },
       { label: 'Maintenance Knowledge Base', icon: BookOpen, href: '#maintenance-kb' },
     ],
   },
@@ -93,8 +94,6 @@ interface SidebarProps {
 }
 
 export function Sidebar({ collapsed, onToggleCollapse, activePage, onNavigate }: SidebarProps) {
-  const [activeItem, setActiveItem] = useState('#overview');
-
   return (
     <div
       className={cn(
@@ -105,7 +104,7 @@ export function Sidebar({ collapsed, onToggleCollapse, activePage, onNavigate }:
       {/* Sidebar Header */}
       <div className="h-16 flex items-center justify-between px-4 border-b border-slate-700">
         {!collapsed && (
-          <span className="text-sm font-semibold text-slate-100">Hoya Agentic AI</span>
+          <span className="text-sm font-semibold text-slate-100">Agentic MES AI</span>
         )}
         <button
           onClick={onToggleCollapse}
@@ -121,7 +120,7 @@ export function Sidebar({ collapsed, onToggleCollapse, activePage, onNavigate }:
       </div>
 
       {/* Menu Groups */}
-      <nav className="flex-1 overflow-y-auto py-4">
+      <nav className="flex-1 overflow-y-auto py-4 scrollbar-thin scrollbar-track-transparent scrollbar-thumb-slate-700/60 hover:scrollbar-thumb-slate-600/80 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-700/60 hover:[&::-webkit-scrollbar-thumb]:bg-slate-600/80">
         {menuGroups.map((group, groupIndex) => (
           <div key={group.title} className={groupIndex > 0 ? 'mt-6' : ''}>
             {/* Group Title */}
@@ -140,7 +139,7 @@ export function Sidebar({ collapsed, onToggleCollapse, activePage, onNavigate }:
             <ul className="space-y-1 px-2">
               {group.items.map((item) => {
                 const Icon = item.icon;
-                const isActive = activeItem === item.href;
+                const isActive = activePage === item.href || (activePage === '#station-maintenance-tracking' && item.href === '/maintenance/workorders');
 
                 return (
                   <li key={item.href}>
@@ -148,7 +147,7 @@ export function Sidebar({ collapsed, onToggleCollapse, activePage, onNavigate }:
                       href={item.href}
                       onClick={(e) => {
                         e.preventDefault();
-                        setActiveItem(item.href);
+                        window.history.pushState({}, '', item.href);
                         onNavigate(item.href);
                       }}
                       className={cn(

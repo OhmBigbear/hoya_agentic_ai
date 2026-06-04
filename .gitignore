@@ -7,3 +7,6 @@ dist/
 .vscode/
 .idea/
 *.log
+.aider*
+*.tar.gz
+uploads/

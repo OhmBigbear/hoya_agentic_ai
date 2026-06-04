@@ -11,6 +11,7 @@ import { ScrapAnalysis } from './components/ScrapAnalysis';
 import { StationMaintenanceTracking } from './components/StationMaintenanceTracking';
 import { StationMaintenanceAnalysis } from './components/StationMaintenanceAnalysis';
 import { MaintenanceKnowledgeBase } from './components/MaintenanceKnowledgeBase';
+import { MaintenanceCostSpareParts } from './components/MaintenanceCostSpareParts';
 import { EngineeringSandbox } from './components/EngineeringSandbox';
 import { AgentsConfiguration } from './components/AgentsConfiguration';
 import { RawDataExplorer } from './components/RawDataExplorer';
@@ -18,7 +19,17 @@ import { RawDataExplorer } from './components/RawDataExplorer';
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [activePage, setActivePage] = useState('#overview');
+  const [activePage, setActivePage] = useState(() => {
+    if (typeof window !== 'undefined' && window.location.pathname === '/maintenance/workorders') {
+      return '/maintenance/workorders';
+    }
+
+    if (typeof window !== 'undefined' && window.location.hash) {
+      return window.location.hash;
+    }
+
+    return '#overview';
+  });
 
   const handleSignIn = () => {
     setIsAuthenticated(true);
@@ -51,9 +62,12 @@ export default function App() {
       case '#scrap-analysis':
         return <ScrapAnalysis sidebarCollapsed={sidebarCollapsed} onNavigate={handleNavigate} />;
       case '#station-maintenance-tracking':
+      case '/maintenance/workorders':
         return <StationMaintenanceTracking sidebarCollapsed={sidebarCollapsed} onNavigate={handleNavigate} />;
       case '#station-maintenance-analysis':
         return <StationMaintenanceAnalysis sidebarCollapsed={sidebarCollapsed} onNavigate={handleNavigate} />;
+      case '#maintenance-cost-spare-parts':
+        return <MaintenanceCostSpareParts sidebarCollapsed={sidebarCollapsed} />;
       case '#maintenance-kb':
         return <MaintenanceKnowledgeBase sidebarCollapsed={sidebarCollapsed} onNavigate={handleNavigate} />;
       case '#engineering-sandbox':

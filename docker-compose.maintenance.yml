@@ -1,0 +1,21 @@
+services:
+  hoya-maintenance-postgres:
+    image: postgres:16-alpine
+    container_name: hoya-maintenance-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: maintenance
+      POSTGRES_PASSWORD: maintenance_dev_password
+      POSTGRES_DB: hoya_maintenance
+    ports:
+      - "26432:5432"
+    volumes:
+      - hoya_maintenance_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U maintenance -d hoya_maintenance"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  hoya_maintenance_pgdata:

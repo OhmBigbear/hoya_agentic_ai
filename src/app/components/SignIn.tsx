@@ -22,7 +22,7 @@ export function SignIn({ onSignIn }: SignInProps) {
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-white mb-2">
-            Hoya Agentic AI
+            Agentic MES AI
           </h1>
           <p className="text-sm text-slate-400">
             Manufacturing Execution & Agentic AI System
@@ -95,7 +95,7 @@ export function SignIn({ onSignIn }: SignInProps) {
         {/* Footer */}
         <div className="text-center mt-8">
           <p className="text-xs text-slate-500">
-            © Hoya MES – Agentic AI
+            © Agentic MES AI
           </p>
         </div>
       </div>

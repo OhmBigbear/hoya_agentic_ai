@@ -1,0 +1,737 @@
+import { AlertTriangle, Archive, CheckCircle2, FileUp, Loader2, RefreshCcw, Search, Stethoscope, Trash2, UploadCloud } from 'lucide-react';
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
+import { Badge } from '../../app/components/ui/badge';
+import { Button } from '../../app/components/ui/button';
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../../app/components/ui/dialog';
+import { Input } from '../../app/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '../../app/components/ui/select';
+import type {
+  DiagnosticsResponse,
+  DocumentManifest,
+  IngestResponse,
+  MaintenanceKbDocumentMetadata,
+  MaintenanceKbSearchRequest,
+  UploadResponse,
+} from '../../types/maintenanceKb';
+import {
+  getProcessingStatusLabel,
+  normalizeDocumentLifecycle,
+  ocrRequiredMessage,
+} from './documentLifecycle';
+
+const supportedExtensions = ['pdf', 'txt', 'docx', 'csv', 'xlsx'];
+const supportedUploadDocumentTypes: Array<MaintenanceKbDocumentMetadata['document_type']> = ['maintenance', 'knowledge', 'other'];
+const documentProcessingMessage = 'Processing document. This may take a few minutes for scanned PDFs.';
+const documentTypeLabels: Record<string, string> = {
+  maintenance: 'Maintenance Document',
+  knowledge: 'Knowledge Document',
+  other: 'Other Document',
+  manual: 'Maintenance Document',
+  sop: 'Maintenance Document',
+  troubleshooting: 'Maintenance Document',
+  history: 'Maintenance Document',
+  lesson: 'Knowledge Document',
+};
+const defaultMetadata: MaintenanceKbDocumentMetadata = {
+  title: '',
+  document_type: 'maintenance',
+  line: 'rx1-surfacing',
+  station: 'curve-generating',
+  machine: 'curve-gen-3b',
+  failure_type: '',
+  knowledge_category: '',
+  criticality: 'medium',
+  language: 'en',
+  version: '',
+  owner: '',
+  effective_date: '',
+  tags: [],
+};
+
+interface DocumentManagementPanelProps {
+  documents: DocumentManifest[];
+  diagnostics: DiagnosticsResponse | null;
+  ingestResult: IngestResponse | null;
+  uploadResult: UploadResponse | null;
+  isLoadingDocuments: boolean;
+  isUploading: boolean;
+  isIngesting: boolean;
+  isLoadingDiagnostics: boolean;
+  documentError?: string | null;
+  ingestError?: string | null;
+  diagnosticsError?: string | null;
+  lifecycleActionError?: string | null;
+  onUpload: (file: File, metadata: MaintenanceKbDocumentMetadata) => Promise<void>;
+  onIngest: (documentId: string) => Promise<void>;
+  onDiagnostics: (documentId: string) => Promise<void>;
+  onArchive?: (documentId: string) => Promise<void>;
+  onDelete?: (documentId: string) => Promise<void>;
+  onRefresh: () => Promise<void>;
+  onSearchFiltersChange: (filters: MaintenanceKbSearchRequest) => void;
+  searchFilters: MaintenanceKbSearchRequest;
+  selectedDocumentIds?: string[];
+  onClearSelectedDocuments?: () => void;
+}
+
+export function DocumentManagementPanel({
+  documents,
+  diagnostics,
+  ingestResult,
+  uploadResult,
+  isLoadingDocuments,
+  isUploading,
+  isIngesting,
+  isLoadingDiagnostics,
+  documentError,
+  ingestError,
+  diagnosticsError,
+  lifecycleActionError,
+  onUpload,
+  onIngest,
+  onDiagnostics,
+  onArchive = async () => {},
+  onDelete = async () => {},
+  onRefresh,
+  onSearchFiltersChange,
+  searchFilters,
+  selectedDocumentIds = [],
+  onClearSelectedDocuments,
+}: DocumentManagementPanelProps) {
+  const [file, setFile] = useState<File | null>(null);
+  const [metadata, setMetadata] = useState<MaintenanceKbDocumentMetadata>(defaultMetadata);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(Boolean(diagnostics));
+  const [pendingLifecycleAction, setPendingLifecycleAction] = useState<DocumentLifecycleAction | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
+
+  const selectedDocument = useMemo(() => {
+    const id = diagnostics?.document_id ?? ingestResult?.document_id ?? uploadResult?.document_id;
+    return documents.find((document) => document.document_id === id);
+  }, [diagnostics?.document_id, documents, ingestResult?.document_id, uploadResult?.document_id]);
+
+  const selectedDocumentTitle = selectedDocument?.title ?? diagnostics?.manifest?.title ?? diagnostics?.document_id;
+  const selectedDocumentFilename = selectedDocument?.filename ?? diagnostics?.manifest?.filename;
+  const isConfirmingDelete = pendingLifecycleAction?.action === 'delete';
+  const isLifecycleActionConfirmed = pendingLifecycleAction
+    ? pendingLifecycleAction.action === 'archive' || isDeleteConfirmationValid(deleteConfirmation)
+    : false;
+
+  useEffect(() => {
+    if (diagnostics) {
+      setIsDiagnosticsOpen(true);
+    }
+  }, [diagnostics]);
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const nextFile = event.target.files?.[0] ?? null;
+    setFile(nextFile);
+    setValidationError(null);
+
+    if (nextFile && !metadata.title.trim()) {
+      setMetadata((current) => ({
+        ...current,
+        title: nextFile.name.replace(/\.[^.]+$/, ''),
+      }));
+    }
+  };
+
+  const handleMetadataChange = (key: keyof MaintenanceKbDocumentMetadata, value: string) => {
+    setMetadata((current) => ({
+      ...current,
+      [key]: key === 'tags' ? value.split(',').map((tag) => tag.trim()).filter(Boolean) : value,
+    }));
+  };
+
+  const submitUpload = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!file) {
+      setValidationError('Select a PDF, TXT, DOCX, CSV, or XLSX file before uploading.');
+      return;
+    }
+
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    if (!extension || !supportedExtensions.includes(extension)) {
+      setValidationError('This file type is not supported yet.');
+      return;
+    }
+
+    if (!metadata.title.trim()) {
+      setValidationError('Enter a title before uploading.');
+      return;
+    }
+
+    if (!metadata.document_type.trim()) {
+      setValidationError('Select a document type before uploading.');
+      return;
+    }
+
+    setValidationError(null);
+    await onUpload(file, applyContextDefaults(metadata, searchFilters));
+  };
+
+  const requestLifecycleAction = (action: DocumentLifecycleActionType, document: DocumentManifest) => {
+    setDeleteConfirmation('');
+    setPendingLifecycleAction({ action, document });
+  };
+
+  const closeLifecycleActionDialog = (isOpen: boolean) => {
+    if (!isOpen) {
+      setPendingLifecycleAction(null);
+      setDeleteConfirmation('');
+    }
+  };
+
+  const confirmLifecycleAction = async () => {
+    if (!pendingLifecycleAction || !isLifecycleActionConfirmed) {
+      return;
+    }
+
+    const { action, document } = pendingLifecycleAction;
+    if (action === 'archive') {
+      await onArchive(document.document_id);
+    } else {
+      await onDelete(document.document_id);
+    }
+
+    setPendingLifecycleAction(null);
+    setDeleteConfirmation('');
+  };
+
+  return (
+    <section className="border-b border-white/10 bg-[#0a0f1e]">
+      <div className="grid gap-4 p-5 xl:grid-cols-[minmax(360px,0.95fr)_minmax(420px,1.1fr)]">
+        <form onSubmit={submitUpload} className="rounded-md border border-white/10 bg-[#141b2e] p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <FileUp className="h-4 w-4 text-cyan-300" />
+            <h3 className="text-sm font-semibold text-white">Upload Document</h3>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <label className="mb-1 block text-xs font-medium uppercase text-slate-400">File</label>
+              <Input type="file" accept=".pdf,.txt,.docx,.csv,.xlsx" onChange={handleFileChange} className="border-white/10 bg-[#1e293b] text-slate-200" />
+            </div>
+            <Field label="Title" value={metadata.title} onChange={(value) => handleMetadataChange('title', value)} />
+            <SelectField
+              label="Document Type"
+              value={metadata.document_type}
+              options={supportedUploadDocumentTypes}
+              onChange={(value) => handleMetadataChange('document_type', value)}
+            />
+            <Field label="Line" value={metadata.line} onChange={(value) => handleMetadataChange('line', value)} />
+            <Field label="Station" value={metadata.station} onChange={(value) => handleMetadataChange('station', value)} />
+            <Field label="Machine" value={metadata.machine} onChange={(value) => handleMetadataChange('machine', value)} />
+            <Field label="Failure Type" value={metadata.failure_type ?? ''} onChange={(value) => handleMetadataChange('failure_type', value)} />
+            <Field label="Knowledge Category" value={metadata.knowledge_category ?? ''} onChange={(value) => handleMetadataChange('knowledge_category', value)} />
+            <SelectField
+              label="Criticality"
+              value={metadata.criticality}
+              options={['low', 'medium', 'high', 'critical']}
+              onChange={(value) => handleMetadataChange('criticality', value)}
+            />
+            <Field label="Language" value={metadata.language} onChange={(value) => handleMetadataChange('language', value)} />
+            <Field label="Version" value={metadata.version ?? ''} onChange={(value) => handleMetadataChange('version', value)} />
+            <Field label="Owner" value={metadata.owner ?? ''} onChange={(value) => handleMetadataChange('owner', value)} />
+            <Field label="Effective Date" type="date" value={metadata.effective_date ?? ''} onChange={(value) => handleMetadataChange('effective_date', value)} />
+            <div className="sm:col-span-2">
+              <Field label="Tags" value={(metadata.tags ?? []).join(', ')} onChange={(value) => handleMetadataChange('tags', value)} placeholder="bearing, spindle, loto" />
+            </div>
+          </div>
+          <StatusMessage message={validationError} tone="error" />
+          <Button type="submit" disabled={isUploading} className="mt-3 bg-[#00d4ff] text-[#0a0f1e] hover:bg-[#00b8e6]">
+            {isUploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UploadCloud className="mr-2 h-4 w-4" />}
+            Upload
+          </Button>
+        </form>
+
+        <div className="flex min-h-0 flex-col rounded-md border border-white/10 bg-[#141b2e] p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-white">Document Status</h3>
+              <p className="text-xs text-slate-400">Uploaded documents and processing status</p>
+            </div>
+            <Button type="button" variant="outline" onClick={() => void onRefresh()} disabled={isLoadingDocuments} className="border-white/10 bg-white/5 text-slate-200 hover:bg-white/10">
+              {isLoadingDocuments ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
+              Refresh
+            </Button>
+          </div>
+          {selectedDocumentIds.length ? (
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-cyan-500/20 bg-cyan-500/10 p-2 text-xs text-cyan-100">
+              <span>AI is focusing on {formatFocusedDocuments(documents, selectedDocumentIds)}.</span>
+              {onClearSelectedDocuments ? (
+                <Button type="button" size="sm" variant="outline" onClick={onClearSelectedDocuments} className="h-7 border-white/10 bg-white/5 px-2 text-xs text-slate-200 hover:bg-white/10">
+                  Clear Focus
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div className="mb-3 grid gap-3 md:grid-cols-[1fr_96px]">
+            <div>
+              <label className="mb-1 block text-xs font-medium uppercase text-slate-400">Search Query</label>
+              <Input
+                value={searchFilters.query ?? ''}
+                onChange={(event) => onSearchFiltersChange({ ...searchFilters, query: event.target.value })}
+                placeholder="Search uploaded and seeded evidence..."
+                className="border-white/10 bg-[#1e293b] text-white placeholder:text-slate-500"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium uppercase text-slate-400">Top K</label>
+              <Input
+                type="number"
+                min={1}
+                max={50}
+                value={searchFilters.top_k ?? searchFilters.limit ?? 10}
+                onChange={(event) => onSearchFiltersChange({ ...searchFilters, top_k: Number(event.target.value) || 10 })}
+                className="border-white/10 bg-[#1e293b] text-white"
+              />
+            </div>
+          </div>
+
+          {isIngesting ? <StatusMessage message={documentProcessingMessage} tone="info" /> : null}
+          <StatusMessage message={documentError ?? lifecycleActionError ?? ingestError ?? diagnosticsError} tone="error" />
+          <div className="min-h-0">
+            {documents.length === 0 && !isLoadingDocuments && !documentError ? (
+              <div className="rounded-md border border-dashed border-white/10 bg-[#101827] p-4 text-sm text-slate-400">No uploaded documents are available yet.</div>
+            ) : (
+              <div className="min-h-[300px] max-h-[42vh] space-y-2 overflow-auto pr-1">
+                {documents.map((document) => (
+                  <DocumentRow
+                    key={document.document_id}
+                    document={document}
+                    isSelected={selectedDocumentIds.includes(document.document_id)}
+                    diagnostics={diagnostics?.document_id === document.document_id ? diagnostics : null}
+                    isIngesting={isIngesting}
+                    isLoadingDiagnostics={isLoadingDiagnostics}
+                    onIngest={onIngest}
+                    onDiagnostics={onDiagnostics}
+                    onArchive={(targetDocument) => requestLifecycleAction('archive', targetDocument)}
+                    onDelete={(targetDocument) => requestLifecycleAction('delete', targetDocument)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {ingestResult ? <ProcessingStatus result={ingestResult} /> : null}
+        </div>
+      </div>
+
+      <Dialog open={isDiagnosticsOpen && Boolean(diagnostics)} onOpenChange={setIsDiagnosticsOpen}>
+        <DialogContent className="grid max-h-[min(86vh,760px)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden border-white/10 bg-[#101827] p-0 text-slate-200 shadow-2xl shadow-black/40 sm:max-w-3xl">
+          <DialogHeader className="border-b border-white/10 px-5 py-4 pr-12">
+            <DialogTitle className="text-white">Document Details</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              {selectedDocumentTitle ?? 'Selected document'}
+              {selectedDocumentFilename ? <span className="block text-xs text-slate-500">{selectedDocumentFilename}</span> : null}
+            </DialogDescription>
+          </DialogHeader>
+          {diagnostics ? (
+            <DiagnosticsBlock diagnostics={diagnostics} title={selectedDocumentTitle} filename={selectedDocumentFilename} />
+          ) : null}
+          <DialogFooter className="flex flex-col gap-2 border-t border-white/10 px-5 py-4 sm:flex-row sm:justify-between">
+            {selectedDocument ? (
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" onClick={() => requestLifecycleAction('archive', selectedDocument)} className="border-amber-500/30 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20">
+                  <Archive className="mr-2 h-4 w-4" />
+                  Archive
+                </Button>
+                <Button type="button" variant="outline" onClick={() => requestLifecycleAction('delete', selectedDocument)} className="border-red-500/40 bg-red-500/10 text-red-100 hover:bg-red-500/20">
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete
+                </Button>
+              </div>
+            ) : <span />}
+            <DialogClose asChild>
+              <Button type="button" variant="outline" className="border-white/10 bg-white/5 text-slate-200 hover:bg-white/10">
+                Close
+              </Button>
+            </DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(pendingLifecycleAction)} onOpenChange={closeLifecycleActionDialog}>
+        <DialogContent className="border-white/10 bg-[#101827] text-slate-200 shadow-2xl shadow-black/40 sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="text-white">{isConfirmingDelete ? 'Delete document?' : 'Archive document?'}</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              {pendingLifecycleAction?.document.title ?? 'Selected document'}
+            </DialogDescription>
+          </DialogHeader>
+          {pendingLifecycleAction ? (
+            <div className="space-y-3 text-sm text-slate-300">
+              {pendingLifecycleAction.action === 'archive' ? (
+                <p>
+                  Archive is the recommended cleanup action. This document will be hidden from AI search and the default document list. Artifacts and history are preserved.
+                </p>
+              ) : (
+                <>
+                  <p>This will remove the document and processing artifacts. This action is not reversible.</p>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium uppercase text-slate-400">Type DELETE to confirm</label>
+                    <Input
+                      value={deleteConfirmation}
+                      onChange={(event) => setDeleteConfirmation(event.target.value)}
+                      placeholder="DELETE"
+                      className="border-red-500/30 bg-[#1e293b] text-white placeholder:text-slate-500"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+          ) : null}
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline" className="border-white/10 bg-white/5 text-slate-200 hover:bg-white/10">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button
+              type="button"
+              onClick={() => void confirmLifecycleAction()}
+              disabled={!isLifecycleActionConfirmed}
+              className={isConfirmingDelete ? 'bg-red-600 text-white hover:bg-red-500 disabled:opacity-50' : 'bg-amber-500/20 text-amber-100 hover:bg-amber-500/30'}
+            >
+              {isConfirmingDelete ? <Trash2 className="mr-2 h-4 w-4" /> : <Archive className="mr-2 h-4 w-4" />}
+              {isConfirmingDelete ? 'Delete Document' : 'Archive Document'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </section>
+  );
+}
+
+type DocumentLifecycleActionType = 'archive' | 'delete';
+
+type DocumentLifecycleAction = {
+  action: DocumentLifecycleActionType;
+  document: DocumentManifest;
+};
+
+export function isDeleteConfirmationValid(value: string): boolean {
+  return value.trim() === 'DELETE';
+}
+
+function contextValue(value: string | undefined): string | undefined {
+  return value && value !== 'all' ? value : undefined;
+}
+
+function applyContextDefaults(
+  metadata: MaintenanceKbDocumentMetadata,
+  searchFilters: MaintenanceKbSearchRequest,
+): MaintenanceKbDocumentMetadata {
+  return {
+    ...metadata,
+    line: metadata.line.trim() || contextValue(searchFilters.line) || contextValue(searchFilters.production_line) || '',
+    station: metadata.station.trim() || contextValue(searchFilters.station) || '',
+    machine: metadata.machine.trim() || contextValue(searchFilters.machine) || '',
+    failure_type: metadata.failure_type?.trim() || contextValue(searchFilters.failure_type),
+    document_type: (metadata.document_type.trim() || contextValue(searchFilters.document_type) || metadata.document_type) as MaintenanceKbDocumentMetadata['document_type'],
+  };
+}
+
+function DocumentRow({
+  document,
+  isSelected,
+  diagnostics,
+  isIngesting,
+  isLoadingDiagnostics,
+  onIngest,
+  onDiagnostics,
+  onArchive,
+  onDelete,
+}: {
+  document: DocumentManifest;
+  isSelected: boolean;
+  diagnostics: DiagnosticsResponse | null;
+  isIngesting: boolean;
+  isLoadingDiagnostics: boolean;
+  onIngest: (documentId: string) => Promise<void>;
+  onDiagnostics: (documentId: string) => Promise<void>;
+  onArchive: (document: DocumentManifest) => void;
+  onDelete: (document: DocumentManifest) => void;
+}) {
+  const lifecycle = normalizeDocumentLifecycle(document, diagnostics);
+  const requiresOcr = lifecycle.requiresOcr;
+
+  return (
+    <div className={`rounded-md border p-3 ${isSelected ? 'border-cyan-500/30 bg-cyan-500/10' : 'border-white/10 bg-[#101827]'}`}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="mb-1 flex flex-wrap items-center gap-2">
+            <span className="text-sm font-semibold text-white">{document.title}</span>
+            <OriginBadge origin={document.source_origin} fallbackOrigin="uploaded" />
+            {isSelected ? <Badge className="border-cyan-500/30 bg-cyan-500/15 text-cyan-100">Focused</Badge> : null}
+            {requiresOcr ? <OcrRequiredBadge /> : null}
+            <Badge className={requiresOcr ? 'border-amber-500/30 bg-amber-500/15 text-amber-100' : 'border-white/10 bg-white/5 text-slate-300'}>
+              {lifecycle.statusLabel}
+            </Badge>
+          </div>
+          <div className="text-xs text-slate-400">{document.filename}</div>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
+            <span>{getDocumentTypeLabel(document.document_type)}</span>
+            {document.machine ? <span>{document.machine}</span> : null}
+            {document.version ? <span>{document.version}</span> : null}
+            {document.uploaded_at ? <span>Uploaded {document.uploaded_at}</span> : null}
+          </div>
+          {lifecycle.visibleWarnings.length ? (
+            <div className="mt-2 text-xs text-amber-200">{lifecycle.visibleWarnings.map(toUserFriendlyProcessingMessage).join(', ')}</div>
+          ) : null}
+          {requiresOcr ? (
+            <div className="mt-2 flex gap-2 rounded-md border border-amber-500/25 bg-amber-500/10 p-2 text-xs text-amber-100">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span>{ocrRequiredMessage} Processing is disabled until OCR creates a reliable text layer for this document.</span>
+            </div>
+          ) : null}
+        </div>
+        <div className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
+          <Button type="button" size="sm" onClick={() => void onIngest(document.document_id)} disabled={isIngesting || requiresOcr} title={requiresOcr ? 'OCR is required before processing can run.' : undefined} className="bg-cyan-500/20 text-cyan-100 hover:bg-cyan-500/30 disabled:cursor-not-allowed disabled:opacity-50">
+            {isIngesting ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="mr-2 h-3.5 w-3.5" />}
+            Process Document
+          </Button>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Button type="button" size="sm" variant="outline" aria-label="Details" title="Details" onClick={() => void onDiagnostics(document.document_id)} disabled={isLoadingDiagnostics} className="h-8 w-8 border-white/10 bg-white/5 p-0 text-slate-200 hover:bg-white/10">
+              {isLoadingDiagnostics ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Stethoscope className="h-3.5 w-3.5" />}
+            </Button>
+            <Button type="button" size="sm" variant="outline" aria-label="Archive" title="Archive" onClick={() => onArchive(document)} className="h-8 w-8 border-amber-500/30 bg-amber-500/10 p-0 text-amber-100 hover:bg-amber-500/20">
+              <Archive className="h-3.5 w-3.5" />
+            </Button>
+            <Button type="button" size="sm" variant="outline" aria-label="Delete" title="Delete" onClick={() => onDelete(document)} className="h-8 w-8 border-red-500/40 bg-red-500/10 p-0 text-red-100 hover:bg-red-500/20">
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProcessingStatus({ result }: { result: IngestResponse }) {
+  return (
+    <div className="mt-3 rounded-md border border-cyan-500/20 bg-cyan-500/10 p-3">
+      <div className="mb-2 text-xs font-semibold uppercase text-cyan-100">Processing Status</div>
+      <div className="grid gap-2 sm:grid-cols-4">
+        {result.steps.map((step) => (
+          <div key={step.step} className="rounded border border-white/10 bg-[#101827] p-2">
+            <div className="text-xs font-medium text-white">{getStepLabel(step.step)}</div>
+            <div className="text-xs text-cyan-200">{getProcessingStatusLabel(step.status)}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function DiagnosticsBlock({
+  diagnostics,
+  title,
+  filename,
+}: {
+  diagnostics: DiagnosticsResponse;
+  title?: string;
+  filename?: string;
+}) {
+  const lifecycle = normalizeDocumentLifecycle(diagnostics);
+  const effectiveStatus = lifecycle.effectiveStatus;
+  const requiresOcr = lifecycle.requiresOcr;
+
+  return (
+    <div className="min-h-0 overflow-y-auto px-5 py-4">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Search className="h-4 w-4 text-cyan-300" />
+        <span className="text-sm font-semibold text-white">{title ?? diagnostics.document_id}</span>
+        {filename ? <span className="text-xs text-slate-500">{filename}</span> : null}
+        {effectiveStatus ? (
+          <Badge className="border-white/10 bg-white/5 text-slate-300">{lifecycle.statusLabel}</Badge>
+        ) : null}
+        {requiresOcr ? <OcrRequiredBadge /> : null}
+      </div>
+      {requiresOcr ? (
+        <div className="mb-3 flex gap-2 rounded-md border border-amber-500/25 bg-amber-500/10 p-2 text-xs text-amber-100">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>{ocrRequiredMessage}</span>
+        </div>
+      ) : null}
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="min-w-0 rounded-md border border-white/10 bg-[#141b2e] p-2 text-xs">
+          <div className="mb-1 text-[11px] font-medium uppercase text-slate-500">Status</div>
+          <div className="break-words text-slate-200">{getProcessingStatusLabel(effectiveStatus)}</div>
+        </div>
+        {lifecycle.stages.map((stage) => (
+          <div key={stage.label} className="min-w-0 rounded-md border border-white/10 bg-[#141b2e] p-2 text-xs">
+            <div className="mb-1 text-[11px] font-medium uppercase text-slate-500">{stage.label}</div>
+            <div className={stage.completed ? 'break-words text-cyan-100' : 'break-words text-slate-400'}>
+              {stage.completed ? 'completed' : 'pending'}
+            </div>
+          </div>
+        ))}
+      </div>
+      {diagnostics.last_error && !lifecycle.isRetrievalReady ? (
+        <div className="mt-3 rounded-md border border-red-500/25 bg-red-500/10 p-3 text-xs text-red-100">
+          <div className="mb-1 font-semibold uppercase text-red-200">Processing message</div>
+          <div className="break-words">{toUserFriendlyProcessingMessage(diagnostics.last_error)}</div>
+        </div>
+      ) : null}
+      {lifecycle.visibleWarnings.length ? (
+        <div className="mt-3 rounded-md border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-100">
+          <div className="mb-1 font-semibold uppercase text-amber-200">Warnings</div>
+          <ul className="space-y-1">
+            {lifecycle.visibleWarnings.map((warning) => (
+              <li key={warning} className="break-words">{toUserFriendlyProcessingMessage(warning)}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function OcrRequiredBadge() {
+  return <Badge className="border-amber-500/30 bg-amber-500/15 text-amber-100">OCR Required</Badge>;
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = 'text',
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  type?: string;
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-xs font-medium uppercase text-slate-400">{label}</label>
+      <Input type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="border-white/10 bg-[#1e293b] text-white placeholder:text-slate-500" />
+    </div>
+  );
+}
+
+function SelectField({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-xs font-medium uppercase text-slate-400">{label}</label>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger className="h-9 border-white/10 bg-[#1e293b] text-white">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent className="border-white/10 bg-[#1e293b]">
+          {options.map((option) => (
+            <SelectItem key={option} value={option} className="text-white">
+              {getDocumentTypeLabel(option)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+function OriginBadge({ origin, fallbackOrigin }: { origin?: string; fallbackOrigin?: string }) {
+  const effectiveOrigin = origin ?? fallbackOrigin;
+
+  if (effectiveOrigin === 'uploaded') {
+    return <Badge className="border-green-500/30 bg-green-500/15 text-green-100">Uploaded KB</Badge>;
+  }
+
+  if (effectiveOrigin === 'seeded') {
+    return <Badge className="border-blue-500/30 bg-blue-500/15 text-blue-100">Seeded KB</Badge>;
+  }
+
+  return <Badge className="border-white/10 bg-white/5 text-slate-300">Maintenance KB</Badge>;
+}
+
+function formatFocusedDocuments(documents: DocumentManifest[], selectedDocumentIds: string[]): string {
+  if (selectedDocumentIds.length === 1) {
+    return documents.find((document) => document.document_id === selectedDocumentIds[0])?.title ?? 'the selected document';
+  }
+
+  return `${selectedDocumentIds.length} selected documents`;
+}
+
+function StatusMessage({ message, tone }: { message?: string | null; tone: 'error' | 'success' | 'info' }) {
+  if (!message) {
+    return null;
+  }
+
+  const toneClassName = tone === 'error'
+    ? 'border-red-500/25 bg-red-500/10 text-red-100'
+    : tone === 'success'
+      ? 'border-green-500/25 bg-green-500/10 text-green-100'
+      : 'border-cyan-500/25 bg-cyan-500/10 text-cyan-100';
+  const Icon = tone === 'error' ? AlertTriangle : tone === 'success' ? CheckCircle2 : Loader2;
+
+  return (
+    <div className={`mt-3 flex gap-2 rounded-md border p-2 text-xs ${toneClassName}`}>
+      <Icon className={`h-4 w-4 shrink-0 ${tone === 'info' ? 'animate-spin' : ''}`} />
+      <span>{message}</span>
+    </div>
+  );
+}
+
+function getDocumentTypeLabel(documentType: string): string {
+  return documentTypeLabels[documentType] ?? documentType;
+}
+
+function getStepLabel(step: string): string {
+  const stepLabels: Record<string, string> = {
+    parse: 'Read document',
+    ocr: 'Read document',
+    chunk: 'Prepare knowledge',
+    index: 'Build search index',
+    activate: 'Ready to ask',
+  };
+  return stepLabels[step] ?? step;
+}
+
+function toUserFriendlyProcessingMessage(message: string): string {
+  const normalized = message.toLowerCase();
+
+  if (/unsupported.*file|file.*unsupported|unsupported_file|unsupported file type/.test(normalized)) {
+    return 'This file type is not supported yet.';
+  }
+
+  if (/ocr.*fail|ocr_failed|ocr required|could not read|extract.*text|text layer/.test(normalized)) {
+    return 'We could not read the document text.';
+  }
+
+  if (/chunk.*fail|chunking_failed|prepare.*search|prepare.*document/.test(normalized)) {
+    return 'We could not prepare this document for search.';
+  }
+
+  if (/index.*fail|indexing_failed|searchable index|embedding.*fail/.test(normalized)) {
+    return 'We could not build the searchable index.';
+  }
+
+  return message;
+}

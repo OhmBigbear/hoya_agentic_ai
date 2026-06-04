@@ -25,7 +25,7 @@ export function Header({ sidebarCollapsed }: HeaderProps) {
       <div className="flex items-center gap-4">
         <div>
           <h1 className="text-base font-semibold text-white">
-            Hoya MES – <span className="text-[#00d4ff]">Agentic AI</span>
+            Agentic MES – <span className="text-[#00d4ff]"> AI</span>
           </h1>
         </div>
         <div className="h-6 w-px bg-white/10" />
