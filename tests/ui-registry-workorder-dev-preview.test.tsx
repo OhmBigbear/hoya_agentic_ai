@@ -17,6 +17,7 @@ import type { WorkspacePayload } from '../src/types/operationsWorkspace';
 import {
   fullWorkorderAgentPayload,
   malformedWorkorderAgentPayload,
+  unsupportedActionWorkorderAgentPayload,
 } from './fixtures/ui-registry/workorder-agent-payload.fixture';
 
 const summary: MaintenanceDashboardSummary = {
@@ -98,6 +99,8 @@ describe('workorder widget developer preview', () => {
     expect(markup).toContain('Widgets ');
     expect(markup).toContain('Type workorder_insight');
     expect(markup).toContain('Intent workorder_insight');
+    expect(markup).toContain('Detected actions');
+    expect(markup).toContain('readonly valid');
     expect(markup).toContain('UI widgets');
     expect(markup).not.toContain('workspace_payload');
   });
@@ -113,14 +116,25 @@ describe('workorder widget developer preview', () => {
     expect(markup).not.toContain('raw');
   });
 
+  it('renders readonly action rejection diagnostics', () => {
+    const markup = renderToStaticMarkup(
+      <DeveloperWidgetRegistryPreview payload={unsupportedActionWorkorderAgentPayload.workspace_payload as unknown as WorkspacePayload} />,
+    );
+
+    expect(markup).toContain('Detected actions');
+    expect(markup).toContain('rejected');
+    expect(markup).toContain('Action &#x27;inspect_unknown&#x27; is not registered');
+    expect(markup).toContain('Action &#x27;delete_workorder&#x27; looks like a write operation');
+  });
+
   it('keeps readonly action clicks as dev-only no-ops without API calls or mutation', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const mutableState = { changed: false };
 
     handleDeveloperReadonlyAction({
       widgetId: 'actions',
-      actionId: 'preview',
-      targetId: 'maintenance.workorders.actions.preview_workorder',
+      actionId: 'view_workorder',
+      targetId: 'maintenance.workorders.actions.view_workorder',
     });
 
     expect(fetchSpy).not.toHaveBeenCalled();

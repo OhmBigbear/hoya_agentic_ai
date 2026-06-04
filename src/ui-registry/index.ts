@@ -1,4 +1,21 @@
 export type {
+  AgentReadonlyAction,
+  AgentReadonlyActionDefinition,
+  AgentReadonlyActionId,
+  AgentReadonlyActionValidation,
+} from './actions/readonlyActions';
+
+export {
+  agentReadonlyActionIds,
+  agentReadonlyActionRegistry,
+  agentReadonlyActionTargetIds,
+  getAgentReadonlyActionDefinition,
+  isWriteLikeActionId,
+  validateAgentReadonlyAction,
+  validateAgentReadonlyActions,
+} from './actions/readonlyActions';
+
+export type {
   UiActionTargetId,
   UiDataTableWidget,
   UiEmptyStateWidget,
@@ -80,6 +97,7 @@ export {
   buildWorkorderWidgetShadowDiagnostics,
 } from './adapters/workorderShadowDiagnostics';
 export type {
+  WorkorderReadonlyActionDiagnostics,
   WorkorderWidgetShadowDiagnostics,
   WorkorderWidgetShadowDiagnosticsOptions,
 } from './adapters/workorderShadowDiagnostics';

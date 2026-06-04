@@ -42,7 +42,7 @@ describe('maintenance workorder registry compatibility harness', () => {
     expect(markup).toContain('Downtime trend');
     expect(markup).toContain('Repeat failure risk');
     expect(markup).toContain('Evidence');
-    expect(markup).toContain('Preview WO-100');
+    expect(markup).toContain('View WO-100');
     expect(markup).not.toContain('Unsupported widget');
     expect(markup).not.toContain('Invalid widget');
   });
@@ -77,7 +77,7 @@ describe('maintenance workorder registry compatibility harness', () => {
     expect(markup).not.toContain('Error summary should not render');
   });
 
-  it('drops unsupported action targets while valid read-only actions remain callable', () => {
+  it('drops rejected actions while valid read-only actions remain callable', () => {
     const widgets = adaptWorkorderAgentPayloadToWidgets(unsupportedActionWorkorderAgentPayload);
     assertAllWidgetsValidate(widgets);
 
@@ -85,9 +85,9 @@ describe('maintenance workorder registry compatibility harness', () => {
     const actionTargets = actionWidget?.actions?.map((action) => action.targetId) ?? [];
 
     expect(actionTargets).toEqual([
-      'maintenance.workorders.actions.preview_workorder',
-      'maintenance.workorders.actions.filter_by_status',
-      'maintenance.workorders.actions.preview_machine',
+      'maintenance.workorders.actions.view_workorder',
+      'maintenance.workorders.actions.view_delay_analysis',
+      'maintenance.workorders.actions.view_bottleneck',
     ]);
     actionTargets.forEach((targetId) => expect(allowedActionTargets.has(targetId)).toBe(true));
 
@@ -96,24 +96,25 @@ describe('maintenance workorder registry compatibility harness', () => {
     const markup = renderToStaticMarkup(element);
     const buttons = findElementsByType(element, 'button');
 
-    expect(markup).toContain('Preview WO-102');
-    expect(markup).toContain('Filter open status');
-    expect(markup).toContain('Preview machine');
-    expect(markup).not.toContain('Approve WO-102');
+    expect(markup).toContain('View WO-102');
+    expect(markup).toContain('View delay analysis');
+    expect(markup).toContain('View bottleneck');
+    expect(markup).not.toContain('Unknown readonly action');
+    expect(markup).not.toContain('Execute machine action');
     expect(markup).not.toContain('Delete WO-102');
     expect(markup).not.toContain('Close workorder');
     expect(buttons.map((button) => button.props.children)).toEqual([
-      'Preview WO-102',
-      'Filter open status',
-      'Preview machine',
+      'View WO-102',
+      'View delay analysis',
+      'View bottleneck',
     ]);
 
     buttons[0].props.onClick();
 
     expect(onReadonlyAction).toHaveBeenCalledTimes(1);
     expect(onReadonlyAction).toHaveBeenCalledWith(expect.objectContaining({
-      actionId: 'preview-wo-102',
-      targetId: 'maintenance.workorders.actions.preview_workorder',
+      actionId: 'view_workorder',
+      targetId: 'maintenance.workorders.actions.view_workorder',
     }));
   });
 

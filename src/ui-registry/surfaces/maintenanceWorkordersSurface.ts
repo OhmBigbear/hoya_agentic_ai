@@ -3,6 +3,7 @@ import type {
   UiRegionId,
   UiSurfaceDefinition,
 } from '../types';
+import { agentReadonlyActionTargetIds } from '../actions/readonlyActions';
 
 export const maintenanceWorkordersSurfaceId = 'maintenance.workorders';
 
@@ -18,16 +19,7 @@ export const maintenanceWorkordersRegionIds = [
   'maintenance.workorders.actions.readonly',
 ] as const satisfies readonly UiRegionId[];
 
-export const maintenanceWorkordersActionTargetIds = [
-  'maintenance.workorders.actions.preview_workorder',
-  'maintenance.workorders.actions.preview_machine',
-  'maintenance.workorders.actions.preview_downtime',
-  'maintenance.workorders.actions.preview_evidence',
-  'maintenance.workorders.actions.open_copilot_context',
-  'maintenance.workorders.actions.filter_by_machine',
-  'maintenance.workorders.actions.filter_by_status',
-  'maintenance.workorders.actions.filter_by_priority',
-] as const satisfies readonly UiActionTargetId[];
+export const maintenanceWorkordersActionTargetIds = agentReadonlyActionTargetIds satisfies readonly UiActionTargetId[];
 
 export const maintenanceWorkordersSurface: UiSurfaceDefinition = {
   id: maintenanceWorkordersSurfaceId,
@@ -81,44 +73,34 @@ export const maintenanceWorkordersSurface: UiSurfaceDefinition = {
   ],
   actionTargets: [
     {
-      id: 'maintenance.workorders.actions.preview_workorder',
-      label: 'Preview workorder',
-      metadata: { mode: 'read_only', scope: 'ui_local', intent: 'preview' },
+      id: 'maintenance.workorders.actions.view_workorder',
+      label: 'View workorder',
+      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect' },
     },
     {
-      id: 'maintenance.workorders.actions.preview_machine',
-      label: 'Preview machine',
-      metadata: { mode: 'read_only', scope: 'ui_local', intent: 'preview' },
+      id: 'maintenance.workorders.actions.view_machine',
+      label: 'View machine',
+      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect' },
     },
     {
-      id: 'maintenance.workorders.actions.preview_downtime',
-      label: 'Preview downtime',
-      metadata: { mode: 'read_only', scope: 'ui_local', intent: 'preview' },
+      id: 'maintenance.workorders.actions.view_workorder_history',
+      label: 'View workorder history',
+      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect' },
     },
     {
-      id: 'maintenance.workorders.actions.preview_evidence',
-      label: 'Preview evidence',
-      metadata: { mode: 'read_only', scope: 'ui_local', intent: 'preview' },
+      id: 'maintenance.workorders.actions.view_delay_analysis',
+      label: 'View delay analysis',
+      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect' },
     },
     {
-      id: 'maintenance.workorders.actions.open_copilot_context',
-      label: 'Open copilot context',
-      metadata: { mode: 'read_only', scope: 'ui_local', intent: 'preview' },
+      id: 'maintenance.workorders.actions.view_bottleneck',
+      label: 'View bottleneck',
+      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect' },
     },
     {
-      id: 'maintenance.workorders.actions.filter_by_machine',
-      label: 'Filter by machine',
-      metadata: { mode: 'read_only', scope: 'ui_local', intent: 'filter' },
-    },
-    {
-      id: 'maintenance.workorders.actions.filter_by_status',
-      label: 'Filter by status',
-      metadata: { mode: 'read_only', scope: 'ui_local', intent: 'filter' },
-    },
-    {
-      id: 'maintenance.workorders.actions.filter_by_priority',
-      label: 'Filter by priority',
-      metadata: { mode: 'read_only', scope: 'ui_local', intent: 'filter' },
+      id: 'maintenance.workorders.actions.view_related_workorders',
+      label: 'View related workorders',
+      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect' },
     },
   ],
   metadata: {

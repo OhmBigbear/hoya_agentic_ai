@@ -1,5 +1,4 @@
 import type {
-  WorkspacePayloadAction,
   WorkspacePayloadChart,
   WorkspacePayloadEvidence,
   WorkspacePayloadKpiCard,
@@ -7,15 +6,18 @@ import type {
   WorkspacePayloadSummary,
 } from '../../types/operationsWorkspace';
 import type {
-  UiActionTargetId,
   UiEvidenceRef,
   UiReadonlyActionListWidget,
   UiTraceRef,
   UiTrendChartWidget,
   UiWidget,
 } from '../types';
+import type { AgentReadonlyActionValidation } from '../actions/readonlyActions';
 import {
-  maintenanceWorkordersActionTargetIds,
+  getAgentReadonlyActionDefinition,
+  validateAgentReadonlyActions,
+} from '../actions/readonlyActions';
+import {
   maintenanceWorkordersRegionIds,
   maintenanceWorkordersSurfaceId,
 } from '../surfaces/maintenanceWorkordersSurface';
@@ -36,7 +38,7 @@ export interface NormalizedWorkorderAgentPayload {
   charts: WorkspacePayloadChart[];
   recommendations: WorkspacePayloadRecommendation[];
   evidence: WorkspacePayloadEvidence[];
-  actions: WorkspacePayloadAction[];
+  actions: AgentReadonlyActionValidation[];
   filters?: Record<string, unknown>;
   workorderRows: WorkorderTableRow[];
   error?: {
@@ -50,7 +52,6 @@ export interface NormalizedWorkorderAgentPayload {
 type WorkorderTableRow = Record<string, string | number | boolean | null>;
 
 const regionIds = new Set<string>(maintenanceWorkordersRegionIds);
-const actionTargetIds = new Set<UiActionTargetId>(maintenanceWorkordersActionTargetIds);
 
 const kpiSummaryRegion = 'maintenance.workorders.kpi.summary';
 const tableRegion = 'maintenance.workorders.table';
@@ -134,10 +135,10 @@ export function normalizeWorkorderAgentPayload(payload: unknown): NormalizedWork
       ...normalizeArray(record.insights, normalizeRecommendation),
     ],
     evidence: normalizeArray(record.evidence, normalizeEvidence),
-    actions: [
-      ...normalizeArray(record.actions, normalizeAction),
-      ...normalizeArray(record.ui_actions, normalizeAction),
-    ],
+    actions: validateAgentReadonlyActions([
+      ...normalizeRecordArray(record.actions),
+      ...normalizeRecordArray(record.ui_actions),
+    ]),
     filters: getRecord(record.filters) ? { ...getRecord(record.filters) } : undefined,
     workorderRows: normalizeWorkorderRows(record.workorders ?? record.workorder_rows ?? record.rows),
     error,
@@ -233,7 +234,7 @@ export function adaptWorkorderAgentPayloadToWidgets(
     });
   }
 
-  const readonlyActions = normalizeReadonlyActions(normalized.actions, normalized.filters);
+  const readonlyActions = normalizeReadonlyActions(normalized.actions);
   if (readonlyActions.length > 0) {
     widgets.push({
       id: widgetId('readonly-actions'),
@@ -437,97 +438,26 @@ function normalizeEvidenceRefs(value: unknown): UiEvidenceRef[] {
   }).filter((item): item is UiEvidenceRef => item !== null);
 }
 
-function normalizeAction(value: unknown): WorkspacePayloadAction | null {
-  const record = getRecord(value);
-  const id = getText(record?.id ?? record?.action_id);
-  const label = getText(record?.label ?? record?.type);
-  const actionType = normalizeWorkspaceActionType(record?.action_type ?? record?.type);
-
-  if (!id || !label || !actionType) {
-    return null;
-  }
-
-  return {
-    id,
-    label,
-    action_type: actionType,
-    target: getText(record?.target ?? record?.targetId ?? record?.entity_id),
-    enabled: record?.enabled !== false && record?.valid !== false,
-  };
-}
-
 function normalizeReadonlyActions(
-  actions: WorkspacePayloadAction[],
-  filters?: Record<string, unknown>,
+  actions: AgentReadonlyActionValidation[],
 ): NonNullable<UiReadonlyActionListWidget['actions']> {
   return actions
-    .filter((action) => action.enabled)
+    .filter((action) => action.valid && action.action && action.targetId)
     .map((action) => {
-      const targetId = mapReadonlyActionTarget(action, filters);
-      if (!targetId || !actionTargetIds.has(targetId)) {
-        return null;
-      }
+      const readonlyAction = action.action;
+      const definition = getAgentReadonlyActionDefinition(readonlyAction.id);
       return {
-        id: safeId(action.id, 'action'),
-        label: action.label,
-        targetId,
+        id: safeId(readonlyAction.id, 'action'),
+        label: readonlyAction.label ?? definition.label,
+        targetId: action.targetId!,
         metadata: compactRecord({
-          actionType: action.action_type,
-          target: action.target,
+          actionId: readonlyAction.id,
+          mode: readonlyAction.mode,
+          navigation: definition.navigation,
+          target: readonlyAction.target,
         }),
       };
     })
-    .filter((action): action is NonNullable<UiReadonlyActionListWidget['actions']>[number] => action !== null);
-}
-
-function mapReadonlyActionTarget(
-  action: WorkspacePayloadAction,
-  filters?: Record<string, unknown>,
-): UiActionTargetId | null {
-  if (action.target && actionTargetIds.has(action.target)) {
-    return action.target;
-  }
-
-  if (action.target?.startsWith('maintenance.workorders.actions.')) {
-    return null;
-  }
-
-  if (action.action_type === 'open_detail') {
-    return 'maintenance.workorders.actions.preview_workorder';
-  }
-
-  if (action.action_type === 'open_trace') {
-    return 'maintenance.workorders.actions.open_copilot_context';
-  }
-
-  if (action.action_type === 'apply_filter') {
-    const target = String(action.target ?? '').toLowerCase();
-    const filterKeys = Object.keys(filters ?? {}).join(' ').toLowerCase();
-    if (target.includes('machine') || filterKeys.includes('machine') || filterKeys.includes('equipment')) {
-      return 'maintenance.workorders.actions.filter_by_machine';
-    }
-    if (target.includes('status') || filterKeys.includes('status')) {
-      return 'maintenance.workorders.actions.filter_by_status';
-    }
-    if (target.includes('priority') || filterKeys.includes('priority')) {
-      return 'maintenance.workorders.actions.filter_by_priority';
-    }
-  }
-
-  return null;
-}
-
-function normalizeWorkspaceActionType(value: unknown): WorkspacePayloadAction['action_type'] | null {
-  if (value === 'open_trace') {
-    return 'open_trace';
-  }
-  if (value === 'open_detail' || value === 'open_detail_panel') {
-    return 'open_detail';
-  }
-  if (value === 'apply_filter' || value === 'set_filter') {
-    return 'apply_filter';
-  }
-  return null;
 }
 
 function normalizeWorkorderRows(value: unknown): WorkorderTableRow[] {

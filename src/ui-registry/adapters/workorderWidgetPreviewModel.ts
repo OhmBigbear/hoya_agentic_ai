@@ -1,8 +1,14 @@
 import { maintenanceWorkordersSurface } from '../surfaces/maintenanceWorkordersSurface';
 import type { UiValidationResult, UiWidget } from '../types';
 import { validateWidgetList } from '../validation';
-import { adaptWorkorderAgentPayloadToWidgets } from './workorderAgentPayloadAdapter';
-import type { WorkorderWidgetShadowDiagnostics } from './workorderShadowDiagnostics';
+import {
+  adaptWorkorderAgentPayloadToWidgets,
+  normalizeWorkorderAgentPayload,
+} from './workorderAgentPayloadAdapter';
+import type {
+  WorkorderReadonlyActionDiagnostics,
+  WorkorderWidgetShadowDiagnostics,
+} from './workorderShadowDiagnostics';
 
 export interface WorkorderWidgetPreviewModel {
   widgets: UiWidget[];
@@ -17,20 +23,26 @@ export function buildWorkorderWidgetPreviewModel(payload: unknown): WorkorderWid
   try {
     const widgets = adaptWorkorderAgentPayloadToWidgets(payload);
     const validation = validateWidgetList(widgets, maintenanceWorkordersSurface);
+    const detectedActions = getActionDiagnostics(payload);
+    const rejectedActionCount = detectedActions.filter((action) => !action.valid).length;
 
     return {
       widgets,
       diagnostics: {
         adaptedWidgetCount: widgets.length,
-        validationValid: validation.valid,
+        validationValid: validation.valid && rejectedActionCount === 0,
         errorCount: validation.errors.length,
         warningCount: validation.warnings.length,
+        detectedActions,
+        actionValidationValid: rejectedActionCount === 0,
+        rejectedActionCount,
         ...identity,
       },
       validation,
       safeToRender: widgets.length > 0,
     };
   } catch {
+    const detectedActions = getActionDiagnostics(payload);
     const validation = {
       valid: false,
       errors: [{ code: 'workorder_widget_preview_failed', message: 'Widget preview could not be built safely' }],
@@ -44,11 +56,30 @@ export function buildWorkorderWidgetPreviewModel(payload: unknown): WorkorderWid
         validationValid: false,
         errorCount: validation.errors.length,
         warningCount: 0,
+        detectedActions,
+        actionValidationValid: false,
+        rejectedActionCount: detectedActions.filter((action) => !action.valid).length,
         ...identity,
       },
       validation,
       safeToRender: false,
     };
+  }
+}
+
+function getActionDiagnostics(payload: unknown): WorkorderReadonlyActionDiagnostics[] {
+  try {
+    return normalizeWorkorderAgentPayload(payload).actions.map((action) => ({
+      actionId: action.actionId,
+      label: action.label,
+      mode: action.mode,
+      targetId: action.targetId,
+      valid: action.valid,
+      status: action.status,
+      rejectionReason: action.rejectionReason,
+    }));
+  } catch {
+    return [];
   }
 }
 

@@ -23,14 +23,12 @@ const expectedRegionIds = [
 ];
 
 const expectedActionTargetIds = [
-  'maintenance.workorders.actions.preview_workorder',
-  'maintenance.workorders.actions.preview_machine',
-  'maintenance.workorders.actions.preview_downtime',
-  'maintenance.workorders.actions.preview_evidence',
-  'maintenance.workorders.actions.open_copilot_context',
-  'maintenance.workorders.actions.filter_by_machine',
-  'maintenance.workorders.actions.filter_by_status',
-  'maintenance.workorders.actions.filter_by_priority',
+  'maintenance.workorders.actions.view_workorder',
+  'maintenance.workorders.actions.view_machine',
+  'maintenance.workorders.actions.view_workorder_history',
+  'maintenance.workorders.actions.view_delay_analysis',
+  'maintenance.workorders.actions.view_bottleneck',
+  'maintenance.workorders.actions.view_related_workorders',
 ];
 
 const dangerousActionVerbs = [
@@ -102,10 +100,9 @@ describe('maintenance workorders surface definition', () => {
     });
   });
 
-  it('marks every action target as read-only, UI-local, and preview or filter only', () => {
+  it('marks every action target as read-only UI navigation only', () => {
     (maintenanceWorkordersSurface.actionTargets ?? []).forEach((target) => {
-      expect(target.metadata).toMatchObject({ mode: 'read_only', scope: 'ui_local' });
-      expect(['preview', 'filter']).toContain(target.metadata?.intent);
+      expect(target.metadata).toMatchObject({ mode: 'readonly', scope: 'ui_navigation', intent: 'inspect' });
     });
   });
 });

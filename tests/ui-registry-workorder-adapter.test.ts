@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
   adaptWorkorderAgentPayloadToWidgets,
+  agentReadonlyActionIds,
+  agentReadonlyActionRegistry,
   isWorkorderAgentPayloadLike,
   maintenanceWorkordersActionTargetIds,
   maintenanceWorkordersRegionIds,
   maintenanceWorkordersSurface,
+  validateAgentReadonlyAction,
   validateWidget,
 } from '../src/ui-registry';
 import type { UiWidget } from '../src/ui-registry';
@@ -141,22 +144,21 @@ describe('workorder agent payload adapter', () => {
     assertAllWidgetsValid(widgets);
   });
 
-  it('maps readonly action payload only to allowed action targets', () => {
+  it('maps valid readonly actions only to registered action targets', () => {
     const widgets = adaptWorkorderAgentPayloadToWidgets({
       ...basePayload,
-      filters: { equipment_no: 'MACHINE-7A' },
       actions: [
-        { id: 'open-wo', label: 'Preview WO-100', action_type: 'open_detail', target: 'WO-100', enabled: true },
-        { id: 'filter-machine', label: 'Filter machine', action_type: 'apply_filter', target: 'workorder_table', enabled: true },
-        { id: 'trace', label: 'Open trace', action_type: 'open_trace', target: 'trace-1', enabled: true },
+        { id: 'view_workorder', mode: 'readonly', label: 'View WO-100', target: 'WO-100' },
+        { id: 'view_machine', mode: 'readonly', label: 'View MACHINE-7A', target: 'MACHINE-7A' },
+        { id: 'view_workorder_history', mode: 'readonly', label: 'History', target: 'WO-100' },
       ],
     });
     const actionWidget = widgets.find((widget): widget is Extract<UiWidget, { type: 'action_list_readonly' }> => widget.type === 'action_list_readonly');
 
     expect(actionWidget?.actions?.map((action) => action.targetId)).toEqual([
-      'maintenance.workorders.actions.preview_workorder',
-      'maintenance.workorders.actions.filter_by_machine',
-      'maintenance.workorders.actions.open_copilot_context',
+      'maintenance.workorders.actions.view_workorder',
+      'maintenance.workorders.actions.view_machine',
+      'maintenance.workorders.actions.view_workorder_history',
     ]);
     actionWidget?.actions?.forEach((action) => {
       expect(maintenanceWorkordersActionTargetIds).toContain(action.targetId);
@@ -164,24 +166,52 @@ describe('workorder agent payload adapter', () => {
     assertAllWidgetsValid(widgets);
   });
 
-  it('drops unsupported action targets', () => {
+  it('maps all six readonly action registry entries', () => {
+    expect(agentReadonlyActionIds).toEqual([
+      'view_workorder',
+      'view_machine',
+      'view_workorder_history',
+      'view_delay_analysis',
+      'view_bottleneck',
+      'view_related_workorders',
+    ]);
+    expect(maintenanceWorkordersActionTargetIds).toEqual(agentReadonlyActionIds.map((id) => agentReadonlyActionRegistry[id].targetId));
+  });
+
+  it('rejects unknown readonly action IDs', () => {
+    const result = validateAgentReadonlyAction({ id: 'view_unknown', mode: 'readonly', label: 'Unknown' });
+
+    expect(result).toMatchObject({
+      valid: false,
+      rejectionCode: 'unknown_action_id',
+    });
+  });
+
+  it('rejects non-readonly action modes', () => {
+    const result = validateAgentReadonlyAction({ id: 'view_workorder', mode: 'execute', label: 'Run' });
+
+    expect(result).toMatchObject({
+      valid: false,
+      rejectionCode: 'non_readonly_mode',
+    });
+  });
+
+  it('rejects write-like action IDs before rendering', () => {
+    const result = validateAgentReadonlyAction({ id: 'delete_workorder', mode: 'readonly', label: 'Delete' });
+
+    expect(result).toMatchObject({
+      valid: false,
+      rejectionCode: 'write_like_action_id',
+    });
+  });
+
+  it('drops rejected readonly action mappings from widgets', () => {
     const widgets = adaptWorkorderAgentPayloadToWidgets({
       ...basePayload,
       actions: [
-        {
-          id: 'bad-target',
-          label: 'Unsupported',
-          action_type: 'open_detail',
-          target: 'maintenance.workorders.actions.approve_workorder',
-          enabled: true,
-        },
-        {
-          id: 'bad-type',
-          label: 'Delete',
-          action_type: 'delete_workorder',
-          target: 'maintenance.workorders.actions.preview_workorder',
-          enabled: true,
-        },
+        { id: 'view_unknown', mode: 'readonly', label: 'Unknown', target: 'WO-100' },
+        { id: 'view_workorder', mode: 'execute', label: 'Execute', target: 'WO-100' },
+        { id: 'delete_workorder', mode: 'readonly', label: 'Delete', target: 'WO-100' },
       ],
     });
     const actionWidget = widgets.find((widget): widget is Extract<UiWidget, { type: 'action_list_readonly' }> => widget.type === 'action_list_readonly');
@@ -239,7 +269,7 @@ describe('workorder agent payload adapter', () => {
       kpi_cards: [{ id: 'open', label: 'Open', value: 4, trend: 'flat', severity: 'normal' }],
       workorders: [{ workorder_no: 'WO-100', status: 'open' }],
       charts: [{ id: 'count', title: 'Count', type: 'line', data: [{ x: 'Mon', y: 4 }] }],
-      actions: [{ id: 'open', label: 'Preview', action_type: 'open_detail', target: 'WO-100', enabled: true }],
+      actions: [{ id: 'view_workorder', mode: 'readonly', label: 'View', target: 'WO-100' }],
       sources: [{ id: 'source-1', source: 'maintenance_db', summary: 'Rows' }],
     });
 

@@ -74,6 +74,9 @@ describe('workorder widget shadow integration', () => {
     });
     expect(diagnostics.adaptedWidgetCount).toBeGreaterThan(0);
     expect(diagnostics.warningCount).toBeGreaterThanOrEqual(0);
+    expect(diagnostics.detectedActions.length).toBeGreaterThan(0);
+    expect(diagnostics.actionValidationValid).toBe(true);
+    expect(diagnostics.rejectedActionCount).toBe(0);
   });
 
   it('handles malformed payloads without throwing', () => {

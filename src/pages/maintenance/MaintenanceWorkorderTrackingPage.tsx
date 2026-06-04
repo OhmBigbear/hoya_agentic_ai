@@ -1337,6 +1337,28 @@ export function DeveloperWidgetRegistryPreview({ payload }: { payload?: Workspac
         <div>Type {diagnostics.lastPayloadType ?? 'unknown'}</div>
         <div className="col-span-2">Intent {diagnostics.intent ?? 'unknown'}</div>
       </div>
+      <div className="mt-2 rounded border border-white/10 bg-[#101827] p-2 text-[11px] text-slate-300">
+        <div className="flex items-center justify-between gap-2">
+          <span>Detected actions {diagnostics.detectedActions.length}</span>
+          <span className={diagnostics.actionValidationValid ? 'text-emerald-200' : 'text-amber-200'}>
+            {diagnostics.actionValidationValid ? 'readonly valid' : `${diagnostics.rejectedActionCount} rejected`}
+          </span>
+        </div>
+        {diagnostics.detectedActions.length > 0 ? (
+          <ul className="mt-1 space-y-1">
+            {diagnostics.detectedActions.map((action, index) => (
+              <li key={`${action.actionId ?? 'action'}-${index}`} className="break-words">
+                <span className={action.valid ? 'text-emerald-200' : 'text-amber-200'}>{action.valid ? 'accepted' : 'rejected'}</span>
+                <span> {action.actionId ?? 'unknown'}</span>
+                <span> mode {action.mode ?? 'unknown'}</span>
+                {action.rejectionReason ? <span> Reason {action.rejectionReason}</span> : null}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-1 text-slate-500">No actions detected.</p>
+        )}
+      </div>
       <div className="mt-3 rounded border border-white/10 bg-[#141b2e] p-2 text-xs text-slate-300">
         {model.safeToRender ? renderUiWidgetList(model.widgets, {
           surface: maintenanceWorkordersSurface,
