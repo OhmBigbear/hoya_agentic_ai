@@ -250,7 +250,7 @@ try {
     summary,
     workspaceState: runtimeState,
   }));
-  assert.match(initialAssistantMarkup, /Quick Insights:/);
+  assert.match(initialAssistantMarkup, /Existing operational signal snapshot:/);
   assert.match(initialAssistantMarkup, /Ask for maintenance blockers, repeat failures, parts risk, or actions for the selected workorder/);
   assert.match(initialAssistantMarkup, /data-testid="maintenance-copilot-scroll-area"/);
   assert.match(initialAssistantMarkup, /min-h-0 flex-1 overflow-hidden p-4/);
