@@ -1,4 +1,7 @@
 export type {
+  ActionExecutionPolicyMetadata,
+  ActionExecutionRequest,
+  ActionExecutionResult,
   AgentReadonlyAction,
   AgentReadonlyActionDefinition,
   AgentReadonlyActionId,
@@ -9,8 +12,11 @@ export {
   agentReadonlyActionIds,
   agentReadonlyActionRegistry,
   agentReadonlyActionTargetIds,
+  executeReadonlyActionNoop,
   getAgentReadonlyActionDefinition,
+  guardReadonlyActionExecution,
   isWriteLikeActionId,
+  readonlyActionExecutionPolicy,
   validateAgentReadonlyAction,
   validateAgentReadonlyActions,
 } from './actions/readonlyActions';

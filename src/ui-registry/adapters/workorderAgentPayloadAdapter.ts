@@ -15,6 +15,7 @@ import type {
 import type { AgentReadonlyActionValidation } from '../actions/readonlyActions';
 import {
   getAgentReadonlyActionDefinition,
+  readonlyActionExecutionPolicy,
   validateAgentReadonlyActions,
 } from '../actions/readonlyActions';
 import {
@@ -453,6 +454,7 @@ function normalizeReadonlyActions(
         metadata: compactRecord({
           actionId: readonlyAction.id,
           mode: readonlyAction.mode,
+          executionPolicy: readonlyActionExecutionPolicy,
           navigation: definition.navigation,
           target: readonlyAction.target,
         }),

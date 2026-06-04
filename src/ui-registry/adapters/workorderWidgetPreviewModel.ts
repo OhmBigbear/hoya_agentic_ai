@@ -1,4 +1,5 @@
 import { maintenanceWorkordersSurface } from '../surfaces/maintenanceWorkordersSurface';
+import { readonlyActionExecutionPolicy } from '../actions/readonlyActions';
 import type { UiValidationResult, UiWidget } from '../types';
 import { validateWidgetList } from '../validation';
 import {
@@ -36,6 +37,7 @@ export function buildWorkorderWidgetPreviewModel(payload: unknown): WorkorderWid
         detectedActions,
         actionValidationValid: rejectedActionCount === 0,
         rejectedActionCount,
+        executionPolicy: readonlyActionExecutionPolicy,
         ...identity,
       },
       validation,
@@ -59,6 +61,7 @@ export function buildWorkorderWidgetPreviewModel(payload: unknown): WorkorderWid
         detectedActions,
         actionValidationValid: false,
         rejectedActionCount: detectedActions.filter((action) => !action.valid).length,
+        executionPolicy: readonlyActionExecutionPolicy,
         ...identity,
       },
       validation,
@@ -77,6 +80,7 @@ function getActionDiagnostics(payload: unknown): WorkorderReadonlyActionDiagnost
       valid: action.valid,
       status: action.status,
       rejectionReason: action.rejectionReason,
+      executionPolicy: readonlyActionExecutionPolicy,
     }));
   } catch {
     return [];

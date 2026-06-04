@@ -1,4 +1,6 @@
 import { maintenanceWorkordersSurface } from '../surfaces/maintenanceWorkordersSurface';
+import { readonlyActionExecutionPolicy } from '../actions/readonlyActions';
+import type { ActionExecutionPolicyMetadata } from '../actions/readonlyActions';
 import type { UiValidationResult } from '../types';
 import { validateWidgetList } from '../validation';
 import {
@@ -14,6 +16,7 @@ export interface WorkorderReadonlyActionDiagnostics {
   valid: boolean;
   status: 'accepted' | 'rejected';
   rejectionReason?: string;
+  executionPolicy: ActionExecutionPolicyMetadata;
 }
 
 export interface WorkorderWidgetShadowDiagnostics {
@@ -26,6 +29,7 @@ export interface WorkorderWidgetShadowDiagnostics {
   detectedActions: WorkorderReadonlyActionDiagnostics[];
   actionValidationValid: boolean;
   rejectedActionCount: number;
+  executionPolicy: ActionExecutionPolicyMetadata;
 }
 
 export interface WorkorderWidgetShadowDiagnosticsOptions {
@@ -56,6 +60,7 @@ export function buildWorkorderWidgetShadowDiagnostics(
       detectedActions,
       actionValidationValid: rejectedActionCount === 0,
       rejectedActionCount,
+      executionPolicy: readonlyActionExecutionPolicy,
     };
   }
 }
@@ -77,6 +82,7 @@ function diagnosticsFromValidation(
     detectedActions,
     actionValidationValid: rejectedActionCount === 0,
     rejectedActionCount,
+    executionPolicy: readonlyActionExecutionPolicy,
   };
 }
 
@@ -90,6 +96,7 @@ function getActionDiagnostics(payload: unknown): WorkorderReadonlyActionDiagnost
       valid: action.valid,
       status: action.status,
       rejectionReason: action.rejectionReason,
+      executionPolicy: readonlyActionExecutionPolicy,
     }));
   } catch {
     return [];

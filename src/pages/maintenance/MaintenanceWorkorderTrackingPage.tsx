@@ -51,8 +51,11 @@ import { requestOperationsWorkspacePreview } from '../../services/operationsWork
 import {
   buildWorkorderWidgetPreviewModel,
   buildWorkorderWidgetShadowDiagnostics,
+  executeReadonlyActionNoop,
   maintenanceWorkordersSurface,
   renderUiWidgetList,
+  readonlyActionExecutionPolicy,
+  type ActionExecutionResult,
   type UiReadonlyActionEvent,
   type WorkorderWidgetShadowDiagnostics,
 } from '../../ui-registry';
@@ -1338,6 +1341,12 @@ export function DeveloperWidgetRegistryPreview({ payload }: { payload?: Workspac
         <div className="col-span-2">Intent {diagnostics.intent ?? 'unknown'}</div>
       </div>
       <div className="mt-2 rounded border border-white/10 bg-[#101827] p-2 text-[11px] text-slate-300">
+        <div className="mb-2 grid grid-cols-2 gap-1 text-slate-400">
+          <div>Execution {diagnostics.executionPolicy.executionMode}</div>
+          <div>Risk {diagnostics.executionPolicy.riskClass}</div>
+          <div>Approval {diagnostics.executionPolicy.requiresApproval ? 'required' : 'not required'}</div>
+          <div>Mutation {diagnostics.executionPolicy.mutationAllowed ? 'allowed' : 'blocked'}</div>
+        </div>
         <div className="flex items-center justify-between gap-2">
           <span>Detected actions {diagnostics.detectedActions.length}</span>
           <span className={diagnostics.actionValidationValid ? 'text-emerald-200' : 'text-amber-200'}>
@@ -1351,6 +1360,7 @@ export function DeveloperWidgetRegistryPreview({ payload }: { payload?: Workspac
                 <span className={action.valid ? 'text-emerald-200' : 'text-amber-200'}>{action.valid ? 'accepted' : 'rejected'}</span>
                 <span> {action.actionId ?? 'unknown'}</span>
                 <span> mode {action.mode ?? 'unknown'}</span>
+                <span> execution {action.executionPolicy.executionMode}</span>
                 {action.rejectionReason ? <span> Reason {action.rejectionReason}</span> : null}
               </li>
             ))}
@@ -1370,14 +1380,28 @@ export function DeveloperWidgetRegistryPreview({ payload }: { payload?: Workspac
   );
 }
 
-export function handleDeveloperReadonlyAction(event: UiReadonlyActionEvent): void {
+export function handleDeveloperReadonlyAction(event: UiReadonlyActionEvent): ActionExecutionResult {
+  const result = executeReadonlyActionNoop({
+    action: {
+      id: event.actionId,
+      mode: 'readonly',
+      targetId: event.targetId,
+      metadata: event.metadata,
+    },
+    executionMode: readonlyActionExecutionPolicy.executionMode,
+  });
+
   if (import.meta.env.DEV) {
     console.debug('Developer widget registry preview action ignored', {
       widgetId: event.widgetId,
       actionId: event.actionId,
       targetId: event.targetId,
+      status: result.status,
+      executionPolicy: result.executionPolicy,
     });
   }
+
+  return result;
 }
 
 function WorkspacePayloadInsight({ payload }: { payload: WorkspacePayload }) {

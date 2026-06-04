@@ -101,6 +101,10 @@ describe('workorder widget developer preview', () => {
     expect(markup).toContain('Intent workorder_insight');
     expect(markup).toContain('Detected actions');
     expect(markup).toContain('readonly valid');
+    expect(markup).toContain('Execution navigation_only');
+    expect(markup).toContain('Risk readonly');
+    expect(markup).toContain('Approval not required');
+    expect(markup).toContain('Mutation blocked');
     expect(markup).toContain('UI widgets');
     expect(markup).not.toContain('workspace_payload');
   });
@@ -131,12 +135,18 @@ describe('workorder widget developer preview', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const mutableState = { changed: false };
 
-    handleDeveloperReadonlyAction({
+    const result = handleDeveloperReadonlyAction({
       widgetId: 'actions',
       actionId: 'view_workorder',
       targetId: 'maintenance.workorders.actions.view_workorder',
     });
 
+    expect(result).toMatchObject({
+      accepted: true,
+      status: 'navigation_ready',
+      backendMutationCalled: false,
+      dataStateChanged: false,
+    });
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(mutableState.changed).toBe(false);
     fetchSpy.mockRestore();

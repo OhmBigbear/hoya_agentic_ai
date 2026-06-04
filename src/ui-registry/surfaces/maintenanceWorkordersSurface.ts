@@ -3,7 +3,7 @@ import type {
   UiRegionId,
   UiSurfaceDefinition,
 } from '../types';
-import { agentReadonlyActionTargetIds } from '../actions/readonlyActions';
+import { agentReadonlyActionTargetIds, readonlyActionExecutionPolicy } from '../actions/readonlyActions';
 
 export const maintenanceWorkordersSurfaceId = 'maintenance.workorders';
 
@@ -75,32 +75,32 @@ export const maintenanceWorkordersSurface: UiSurfaceDefinition = {
     {
       id: 'maintenance.workorders.actions.view_workorder',
       label: 'View workorder',
-      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect' },
+      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect', executionPolicy: readonlyActionExecutionPolicy },
     },
     {
       id: 'maintenance.workorders.actions.view_machine',
       label: 'View machine',
-      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect' },
+      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect', executionPolicy: readonlyActionExecutionPolicy },
     },
     {
       id: 'maintenance.workorders.actions.view_workorder_history',
       label: 'View workorder history',
-      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect' },
+      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect', executionPolicy: readonlyActionExecutionPolicy },
     },
     {
       id: 'maintenance.workorders.actions.view_delay_analysis',
       label: 'View delay analysis',
-      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect' },
+      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect', executionPolicy: readonlyActionExecutionPolicy },
     },
     {
       id: 'maintenance.workorders.actions.view_bottleneck',
       label: 'View bottleneck',
-      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect' },
+      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect', executionPolicy: readonlyActionExecutionPolicy },
     },
     {
       id: 'maintenance.workorders.actions.view_related_workorders',
       label: 'View related workorders',
-      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect' },
+      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect', executionPolicy: readonlyActionExecutionPolicy },
     },
   ],
   metadata: {

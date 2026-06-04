@@ -4,10 +4,13 @@ import {
   adaptWorkorderAgentPayloadToWidgets,
   agentReadonlyActionIds,
   agentReadonlyActionRegistry,
+  executeReadonlyActionNoop,
+  guardReadonlyActionExecution,
   isWorkorderAgentPayloadLike,
   maintenanceWorkordersActionTargetIds,
   maintenanceWorkordersRegionIds,
   maintenanceWorkordersSurface,
+  readonlyActionExecutionPolicy,
   validateAgentReadonlyAction,
   validateWidget,
 } from '../src/ui-registry';
@@ -203,6 +206,91 @@ describe('workorder agent payload adapter', () => {
       valid: false,
       rejectionCode: 'write_like_action_id',
     });
+  });
+
+  it('accepts valid readonly execution requests as navigation-only no-ops', () => {
+    const result = guardReadonlyActionExecution({
+      requestId: 'exec-1',
+      executionMode: 'navigation_only',
+      action: { id: 'view_workorder', mode: 'readonly', label: 'View WO-100', target: 'WO-100' },
+    });
+
+    expect(result).toMatchObject({
+      requestId: 'exec-1',
+      actionId: 'view_workorder',
+      targetId: 'maintenance.workorders.actions.view_workorder',
+      accepted: true,
+      status: 'navigation_ready',
+      executionPolicy: readonlyActionExecutionPolicy,
+      backendMutationCalled: false,
+      dataStateChanged: false,
+      navigation: {
+        targetId: 'maintenance.workorders.actions.view_workorder',
+        intent: 'inspect_workorder',
+        target: 'WO-100',
+      },
+    });
+  });
+
+  it('rejects unknown action execution requests', () => {
+    const result = guardReadonlyActionExecution({
+      action: { id: 'view_secret_panel', mode: 'readonly' },
+      executionMode: 'navigation_only',
+    });
+
+    expect(result).toMatchObject({
+      accepted: false,
+      status: 'rejected',
+      rejectionCode: 'unknown_action_id',
+      backendMutationCalled: false,
+      dataStateChanged: false,
+    });
+  });
+
+  it('rejects readonly execution requests carrying mutation intent', () => {
+    const result = guardReadonlyActionExecution({
+      action: { id: 'view_workorder', mode: 'readonly', metadata: { mutationIntent: true } },
+      executionMode: 'navigation_only',
+    });
+
+    expect(result).toMatchObject({
+      accepted: false,
+      status: 'rejected',
+      rejectionCode: 'mutation_intent_rejected',
+      backendMutationCalled: false,
+      dataStateChanged: false,
+    });
+  });
+
+  it('rejects non-readonly execution modes', () => {
+    const result = guardReadonlyActionExecution({
+      action: { id: 'view_workorder', mode: 'readonly' },
+      executionMode: 'mutation',
+    });
+
+    expect(result).toMatchObject({
+      accepted: false,
+      status: 'rejected',
+      rejectionCode: 'non_readonly_execution_mode',
+    });
+  });
+
+  it('keeps execution handler no-op and does not call backend mutation APIs', () => {
+    let mutationCalls = 0;
+    const mutationApi = () => {
+      mutationCalls += 1;
+    };
+
+    const result = executeReadonlyActionNoop({
+      action: { id: 'view_machine', mode: 'readonly', target: 'MACHINE-7A' },
+      executionMode: 'navigation_only',
+      metadata: { mutationApi },
+    });
+
+    expect(result.accepted).toBe(true);
+    expect(result.backendMutationCalled).toBe(false);
+    expect(result.dataStateChanged).toBe(false);
+    expect(mutationCalls).toBe(0);
   });
 
   it('drops rejected readonly action mappings from widgets', () => {

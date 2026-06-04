@@ -36,6 +36,50 @@ export interface AgentReadonlyActionValidation {
   action?: AgentReadonlyAction;
 }
 
+export type ActionExecutionMode = 'navigation_only';
+export type ActionRiskClass = 'readonly';
+
+export interface ActionExecutionPolicyMetadata {
+  executionMode: ActionExecutionMode;
+  riskClass: ActionRiskClass;
+  requiresApproval: false;
+  mutationAllowed: false;
+}
+
+export interface ActionExecutionRequest {
+  requestId?: string;
+  action: unknown;
+  executionMode?: string;
+  mutationIntent?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ActionExecutionResult {
+  requestId?: string;
+  actionId?: string;
+  targetId?: UiActionTargetId;
+  accepted: boolean;
+  status: 'navigation_ready' | 'rejected';
+  executionPolicy: ActionExecutionPolicyMetadata;
+  navigation?: {
+    targetId: UiActionTargetId;
+    intent: AgentReadonlyActionDefinition['navigation'];
+    target?: string;
+    params?: Record<string, unknown>;
+  };
+  rejectionCode?: string;
+  rejectionReason?: string;
+  backendMutationCalled: false;
+  dataStateChanged: false;
+}
+
+export const readonlyActionExecutionPolicy = {
+  executionMode: 'navigation_only',
+  riskClass: 'readonly',
+  requiresApproval: false,
+  mutationAllowed: false,
+} as const satisfies ActionExecutionPolicyMetadata;
+
 const readonlyActionDefinitions = [
   {
     id: 'view_workorder',
@@ -141,8 +185,83 @@ export function validateAgentReadonlyActions(rawActions: unknown[]): AgentReadon
   return rawActions.map(validateAgentReadonlyAction);
 }
 
+export function guardReadonlyActionExecution(request: ActionExecutionRequest): ActionExecutionResult {
+  if (request.executionMode !== undefined && request.executionMode !== readonlyActionExecutionPolicy.executionMode) {
+    return rejectedExecution(request, undefined, 'non_readonly_execution_mode', 'Readonly actions only support navigation_only execution');
+  }
+
+  if (hasMutationIntent(request) || hasMutationIntent(request.action)) {
+    const actionId = getText(getRecord(request.action)?.id ?? getRecord(request.action)?.action_id ?? getRecord(request.action)?.actionId);
+    return rejectedExecution(request, actionId, 'mutation_intent_rejected', 'Readonly action execution cannot carry mutation intent');
+  }
+
+  const validation = validateAgentReadonlyAction(request.action);
+  if (!validation.valid || !validation.action || !validation.targetId) {
+    return rejectedExecution(request, validation.actionId, validation.rejectionCode ?? 'invalid_readonly_action', validation.rejectionReason ?? 'Readonly action validation failed');
+  }
+
+  const definition = getAgentReadonlyActionDefinition(validation.action.id);
+  return {
+    requestId: request.requestId,
+    actionId: validation.action.id,
+    targetId: definition.targetId,
+    accepted: true,
+    status: 'navigation_ready',
+    executionPolicy: readonlyActionExecutionPolicy,
+    navigation: {
+      targetId: definition.targetId,
+      intent: definition.navigation,
+      target: validation.action.target,
+      params: validation.action.params,
+    },
+    backendMutationCalled: false,
+    dataStateChanged: false,
+  };
+}
+
+export function executeReadonlyActionNoop(request: ActionExecutionRequest): ActionExecutionResult {
+  return guardReadonlyActionExecution(request);
+}
+
 export function isWriteLikeActionId(value: string | undefined): boolean {
   return Boolean(value && writeLikePattern.test(value));
+}
+
+function hasMutationIntent(value: unknown): boolean {
+  const record = getRecord(value);
+  if (!record) {
+    return false;
+  }
+
+  if (record.mutationIntent === true || record.mutation_intent === true || record.mutationAllowed === true || record.mutation_allowed === true) {
+    return true;
+  }
+
+  const intent = getText(record.intent);
+  if (intent && isWriteLikeActionId(intent)) {
+    return true;
+  }
+
+  return hasMutationIntent(record.metadata) || hasMutationIntent(record.params) || hasMutationIntent(record.parameters);
+}
+
+function rejectedExecution(
+  request: ActionExecutionRequest,
+  actionId: string | undefined,
+  rejectionCode: string,
+  rejectionReason: string,
+): ActionExecutionResult {
+  return {
+    requestId: request.requestId,
+    actionId,
+    accepted: false,
+    status: 'rejected',
+    executionPolicy: readonlyActionExecutionPolicy,
+    rejectionCode,
+    rejectionReason,
+    backendMutationCalled: false,
+    dataStateChanged: false,
+  };
 }
 
 function rejected(
