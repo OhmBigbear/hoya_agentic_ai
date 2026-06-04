@@ -66,6 +66,7 @@ import {
   type WorkorderAgentRuntimeRequest,
   type WorkorderAgentRuntimeResult,
 } from '../../services/workorderAgentRuntimeApi';
+import { buildWorkorderRuntimeDiagnosticPayload } from '../../services/workorderAgentRuntimeContract';
 import type {
   MaintenanceDashboardSummary,
   MaintenanceHoldHistory,
@@ -127,6 +128,12 @@ interface RuntimeFetchDiagnosticsState {
   completedAt?: string;
   errorReason?: string;
   payload?: unknown;
+  endpointUrl?: string;
+  endpointPath?: string;
+  clientTraceId?: string;
+  runtimeTraceId?: string;
+  payloadVersion?: string;
+  errorCode?: string;
 }
 
 export interface WorkorderFilters {
@@ -461,12 +468,12 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
     });
 
     const result = await runtimeRequest({
-      question,
+      query: question,
       selected_workorder_id: operationsWorkspace.state.selectedWorkorderId ?? selectedWorkorder?.workorder_no,
-      machine_id: operationsWorkspace.state.selectedMachineId ?? selectedWorkorder?.equipment_no,
+      selected_machine_id: operationsWorkspace.state.selectedMachineId ?? selectedWorkorder?.equipment_no,
       surface_id: maintenanceWorkordersSurfaceId,
       request_source: 'hoya_ui.developer_diagnostics',
-      context_metadata: {
+      context: {
         filters: buildOperationsWorkspacePreviewFilters(filters, operationsWorkspace.state, selectedWorkorder),
         workspace_state: {
           selected_workorder_id: operationsWorkspace.state.selectedWorkorderId,
@@ -485,7 +492,13 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
         requestedAt: result.requestedAt,
         completedAt: result.completedAt,
         errorReason: 'Runtime response did not match the Workorder Agent payload envelope',
-        payload: buildRuntimeDiagnosticPayload('runtime_invalid_response', 'Runtime response did not match the Workorder Agent payload envelope'),
+        payload: buildWorkorderRuntimeDiagnosticPayload('runtime_invalid_response', 'Runtime response did not match the Workorder Agent payload envelope', 'error', result.diagnostics),
+        endpointUrl: result.diagnostics.endpoint_url,
+        endpointPath: result.diagnostics.endpoint_path,
+        clientTraceId: result.diagnostics.client_trace_id,
+        runtimeTraceId: result.diagnostics.runtime_trace_id,
+        payloadVersion: result.diagnostics.payload_version,
+        errorCode: result.diagnostics.error_code,
       });
       return;
     }
@@ -497,6 +510,12 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
       completedAt: result.completedAt,
       errorReason: result.status === 'success' ? undefined : result.errorReason,
       payload: result.payload,
+      endpointUrl: result.diagnostics.endpoint_url,
+      endpointPath: result.diagnostics.endpoint_path,
+      clientTraceId: result.diagnostics.client_trace_id,
+      runtimeTraceId: result.diagnostics.runtime_trace_id,
+      payloadVersion: result.diagnostics.payload_version,
+      errorCode: result.diagnostics.error_code,
     });
   }, [filters, inputMessage, operationsWorkspace.state, runtimeRequest, selectedWorkorder]);
 
@@ -1548,30 +1567,16 @@ function RuntimeFetchDiagnosticsPanel({
         ) : null}
       </div>
       {runtimeStatus?.errorReason ? <p className="mt-1 break-words text-amber-200">reason {runtimeStatus.errorReason}</p> : null}
+      {runtimeStatus?.endpointUrl ? <p className="mt-1 break-words">endpoint_url {runtimeStatus.endpointUrl}</p> : null}
+      {runtimeStatus?.endpointPath ? <p className="mt-1 break-words">endpoint_path {runtimeStatus.endpointPath}</p> : null}
+      {runtimeStatus?.clientTraceId ? <p className="mt-1 break-words">client_trace_id {runtimeStatus.clientTraceId}</p> : null}
+      {runtimeStatus?.runtimeTraceId ? <p className="mt-1 break-words">runtime_trace_id {runtimeStatus.runtimeTraceId}</p> : null}
+      {runtimeStatus?.payloadVersion ? <p className="mt-1 break-words">payload_version {runtimeStatus.payloadVersion}</p> : null}
+      {runtimeStatus?.errorCode ? <p className="mt-1 break-words text-amber-200">error_code {runtimeStatus.errorCode}</p> : null}
       {runtimeStatus?.requestedAt ? <p className="mt-1">requested_at {runtimeStatus.requestedAt}</p> : null}
       {runtimeStatus?.completedAt ? <p>completed_at {runtimeStatus.completedAt}</p> : null}
     </div>
   );
-}
-
-function buildRuntimeDiagnosticPayload(code: string, message: string): unknown {
-  return {
-    payload_type: 'workorder_agent_response',
-    intent: 'workorder_insight',
-    error: {
-      code,
-      message,
-    },
-    diagnostics: [{
-      code,
-      message,
-      severity: 'error',
-      section: 'runtime_fetch',
-    }],
-    trace_metadata: {
-      payload_version: 'unknown',
-    },
-  };
 }
 
 export function handleDeveloperReadonlyAction(event: UiReadonlyActionEvent): ActionExecutionResult {

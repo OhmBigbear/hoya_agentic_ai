@@ -5,6 +5,11 @@ import {
   requestWorkorderAgentRuntime,
 } from '../src/services/workorderAgentRuntimeApi';
 import {
+  buildWorkorderRuntimeRequest,
+  parseWorkorderRuntimeError,
+  parseWorkorderRuntimeResponse,
+} from '../src/services/workorderAgentRuntimeContract';
+import {
   buildWorkorderWidgetPreviewModel,
 } from '../src/ui-registry';
 import {
@@ -13,6 +18,19 @@ import {
 } from './fixtures/ui-registry/workorder-agent-payload.fixture';
 
 const runtimeRequest = {
+  query: 'show maintenance blockers',
+  selected_workorder_id: 'WO-100',
+  selected_machine_id: 'MACHINE-7A',
+  surface_id: 'maintenance.workorders',
+  request_source: 'hoya_ui.developer_diagnostics',
+  context: {
+    filters: { status: 'open' },
+  },
+  client_trace_id: 'client-trace-021-b09',
+  payload_version: '1.0',
+};
+
+const legacyRuntimeRequest = {
   question: 'show maintenance blockers',
   selected_workorder_id: 'WO-100',
   machine_id: 'MACHINE-7A',
@@ -34,7 +52,7 @@ describe('workorder agent runtime API', () => {
     expect(buildWorkorderAgentRuntimeUrl('', '/api/workorder-agent/runtime')).toBeNull();
   });
 
-  it('builds the correct passive runtime request', async () => {
+  it('builds the valid canonical passive runtime request shape', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(JSON.stringify(runtimeWorkorderAgentResponse), { status: 200 }),
     );
@@ -58,6 +76,39 @@ describe('workorder agent runtime API', () => {
     expect(JSON.parse(String(fetchImpl.mock.calls[0][1].body))).toEqual(runtimeRequest);
   });
 
+  it('keeps B0.8 request aliases backward compatible', async () => {
+    const request = buildWorkorderRuntimeRequest(legacyRuntimeRequest, () => 'legacy-client-trace');
+
+    expect(request).toEqual({
+      query: 'show maintenance blockers',
+      selected_workorder_id: 'WO-100',
+      selected_machine_id: 'MACHINE-7A',
+      surface_id: 'maintenance.workorders',
+      request_source: 'hoya_ui.developer_diagnostics',
+      context: {
+        filters: { status: 'open' },
+      },
+      client_trace_id: 'legacy-client-trace',
+      payload_version: '1.0',
+    });
+  });
+
+  it('parses valid runtime response shapes', () => {
+    const parsed = parseWorkorderRuntimeResponse(runtimeWorkorderAgentResponse, {
+      endpoint_url: 'https://agentic-core.example.com/api/workorder-agent/runtime',
+      client_trace_id: 'client-trace-021-b09',
+    });
+
+    expect(parsed.ok).toBe(true);
+    expect(parsed.payload).toEqual(runtimeWorkorderAgentResponse);
+    expect(parsed.diagnostics).toMatchObject({
+      endpoint_url: 'https://agentic-core.example.com/api/workorder-agent/runtime',
+      client_trace_id: 'client-trace-021-b09',
+      runtime_trace_id: 'trace-runtime-workorder-021',
+      payload_version: '2.0',
+    });
+  });
+
   it('handles successful runtime payload envelopes', async () => {
     const result = await requestWorkorderAgentRuntime(runtimeRequest, {
       baseUrl: 'https://agentic-core.example.com',
@@ -73,6 +124,13 @@ describe('workorder agent runtime API', () => {
       completedAt: '2026-06-05T00:00:01.000Z',
     });
     expect(result.status === 'success' ? result.payload : null).toEqual(runtimeWorkorderAgentResponse);
+    expect(result.diagnostics).toMatchObject({
+      endpoint_url: 'https://agentic-core.example.com/api/workorder-agent/runtime',
+      endpoint_path: '/api/workorder-agent/runtime',
+      client_trace_id: 'client-trace-021-b09',
+      runtime_trace_id: 'trace-runtime-workorder-021',
+      payload_version: '2.0',
+    });
   });
 
   it('handles disabled mode without calling the backend', async () => {
@@ -93,6 +151,32 @@ describe('workorder agent runtime API', () => {
       code: 'runtime_disabled',
       section: 'runtime_fetch',
     });
+    expect(result.diagnostics).toMatchObject({
+      endpoint_path: '/api/workorder-agent/runtime',
+      client_trace_id: 'client-trace-021-b09',
+      payload_version: '1.0',
+      error_code: 'runtime_disabled',
+    });
+  });
+
+  it('parses runtime error response shapes', () => {
+    const parsed = parseWorkorderRuntimeError({
+      error: {
+        error_code: 'agent_unavailable',
+        message: 'agent unavailable',
+        retryable: true,
+        trace_id: 'trace-error-021',
+        details: { queue_depth: 12 },
+      },
+    });
+
+    expect(parsed).toEqual({
+      error_code: 'agent_unavailable',
+      message: 'agent unavailable',
+      retryable: true,
+      trace_id: 'trace-error-021',
+      details: { queue_depth: 12 },
+    });
   });
 
   it('handles runtime HTTP errors as diagnostics-only fallback payloads', async () => {
@@ -100,7 +184,15 @@ describe('workorder agent runtime API', () => {
       baseUrl: 'https://agentic-core.example.com',
       path: '/api/workorder-agent/runtime',
       fetchImpl: vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ error: { message: 'agent unavailable' } }), { status: 503, statusText: 'Service Unavailable' }),
+        new Response(JSON.stringify({
+          error: {
+            error_code: 'agent_unavailable',
+            message: 'agent unavailable',
+            retryable: true,
+            trace_id: 'trace-error-021',
+            details: { queue_depth: 12 },
+          },
+        }), { status: 503, statusText: 'Service Unavailable' }),
       ),
       now: fixedClock(),
     });
@@ -113,7 +205,36 @@ describe('workorder agent runtime API', () => {
     const model = buildWorkorderWidgetPreviewModel(result.payload);
     expect(model.safeToRender).toBe(true);
     expect(model.diagnostics.validationValid).toBe(false);
-    expect(model.diagnostics.runtimeDiagnostics.map((diagnostic) => diagnostic.code)).toContain('runtime_error');
+    expect(model.diagnostics.runtimeDiagnostics.map((diagnostic) => diagnostic.code)).toContain('agent_unavailable');
+    expect(result.diagnostics).toMatchObject({
+      runtime_trace_id: 'trace-error-021',
+      error_code: 'agent_unavailable',
+    });
+  });
+
+  it('turns malformed runtime responses into diagnostics-only payloads', async () => {
+    const result = await requestWorkorderAgentRuntime(runtimeRequest, {
+      baseUrl: 'https://agentic-core.example.com',
+      path: '/api/workorder-agent/runtime',
+      fetchImpl: vi.fn().mockResolvedValue(new Response(JSON.stringify({ message: 'not a runtime envelope' }), { status: 200 })),
+      now: fixedClock(),
+    });
+
+    expect(result).toMatchObject({
+      status: 'invalid_response',
+      source: 'fallback',
+      errorReason: 'Runtime response did not match the Workorder Agent payload envelope',
+    });
+    const model = buildWorkorderWidgetPreviewModel(result.payload);
+    expect(model.safeToRender).toBe(true);
+    expect(model.diagnostics.runtimeDiagnostics[0]).toMatchObject({
+      code: 'runtime_invalid_response',
+      section: 'runtime_fetch',
+    });
+    expect(result.diagnostics).toMatchObject({
+      error_code: 'runtime_invalid_response',
+      client_trace_id: 'client-trace-021-b09',
+    });
   });
 
   it('handles timeout errors as diagnostics-only fallback payloads', async () => {
@@ -132,6 +253,10 @@ describe('workorder agent runtime API', () => {
     expect(result.status).toBe('timeout');
     expect(result.source).toBe('fallback');
     expect(result.status === 'timeout' ? result.errorReason : '').toContain('timed out');
+    expect(result.diagnostics).toMatchObject({
+      error_code: 'runtime_timeout',
+      client_trace_id: 'client-trace-021-b09',
+    });
   });
 
   it('runtime responses normalize through the existing widget adapter', () => {

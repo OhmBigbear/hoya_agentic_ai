@@ -4,18 +4,18 @@ import {
   WORKORDER_AGENT_RUNTIME_PATH,
   WORKORDER_AGENT_RUNTIME_TIMEOUT_MS,
 } from '../shared/config/env';
+import {
+  buildWorkorderRuntimeDiagnosticPayload,
+  buildWorkorderRuntimeRequest,
+  parseWorkorderRuntimeError,
+  parseWorkorderRuntimeResponse,
+  type WorkorderRuntimeContractDiagnostics,
+  type WorkorderRuntimeRequestInput,
+} from './workorderAgentRuntimeContract';
 
 export type WorkorderAgentRuntimeSource = 'runtime' | 'fallback';
-export type WorkorderAgentRuntimeStatus = 'success' | 'disabled' | 'timeout' | 'error';
-
-export interface WorkorderAgentRuntimeRequest {
-  question: string;
-  selected_workorder_id?: string;
-  machine_id?: string;
-  surface_id: string;
-  request_source: string;
-  context_metadata?: Record<string, unknown>;
-}
+export type WorkorderAgentRuntimeStatus = 'success' | 'disabled' | 'timeout' | 'error' | 'invalid_response';
+export type WorkorderAgentRuntimeRequest = WorkorderRuntimeRequestInput;
 
 export interface WorkorderAgentRuntimeSuccess {
   status: 'success';
@@ -23,6 +23,7 @@ export interface WorkorderAgentRuntimeSuccess {
   payload: unknown;
   requestedAt: string;
   completedAt: string;
+  diagnostics: WorkorderRuntimeContractDiagnostics;
 }
 
 export interface WorkorderAgentRuntimeFailure {
@@ -32,6 +33,7 @@ export interface WorkorderAgentRuntimeFailure {
   requestedAt: string;
   completedAt: string;
   payload: unknown;
+  diagnostics: WorkorderRuntimeContractDiagnostics;
 }
 
 export type WorkorderAgentRuntimeResult = WorkorderAgentRuntimeSuccess | WorkorderAgentRuntimeFailure;
@@ -52,10 +54,26 @@ export async function requestWorkorderAgentRuntime(
   const now = options.now ?? (() => new Date().toISOString());
   const requestedAt = now();
   const endpoint = buildWorkorderAgentRuntimeUrl(options.baseUrl, options.path, options.endpointUrl);
+  const endpointPath = options.path ?? WORKORDER_AGENT_RUNTIME_PATH;
+  const runtimeRequest = buildWorkorderRuntimeRequest(request);
+  const baseDiagnostics: WorkorderRuntimeContractDiagnostics = {
+    endpoint_url: endpoint ?? undefined,
+    endpoint_path: endpointPath,
+    client_trace_id: runtimeRequest.client_trace_id,
+    payload_version: runtimeRequest.payload_version,
+  };
 
   if (!endpoint) {
     const completedAt = now();
-    return runtimeFailure('disabled', 'Workorder Agent runtime endpoint is not configured', request, requestedAt, completedAt);
+    return runtimeFailure(
+      'disabled',
+      'runtime_disabled',
+      'Workorder Agent runtime endpoint is not configured',
+      { ...baseDiagnostics, error_code: 'runtime_disabled' },
+      requestedAt,
+      completedAt,
+      'info',
+    );
   }
 
   const timeoutMs = normalizeTimeoutMs(options.timeoutMs ?? WORKORDER_AGENT_RUNTIME_TIMEOUT_MS);
@@ -70,35 +88,69 @@ export async function requestWorkorderAgentRuntime(
         Accept: 'application/json',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(normalizeRuntimeRequest(request)),
+      body: JSON.stringify(runtimeRequest),
       signal: controller.signal,
     });
     const payload = await parseRuntimeJsonResponse(response);
     const completedAt = now();
 
     if (!response.ok) {
+      const error = parseWorkorderRuntimeError(payload, `Workorder Agent runtime request failed with ${response.status} ${response.statusText}`);
       return runtimeFailure(
         'error',
-        getRuntimeErrorReason(payload) ?? `Workorder Agent runtime request failed with ${response.status} ${response.statusText}`,
-        request,
+        error.error_code,
+        error.message,
+        {
+          ...baseDiagnostics,
+          runtime_trace_id: error.trace_id,
+          error_code: error.error_code,
+        },
         requestedAt,
         completedAt,
       );
     }
 
+    const parsed = parseWorkorderRuntimeResponse(payload, baseDiagnostics);
+    if (!parsed.ok) {
+      return {
+        status: 'invalid_response',
+        source: 'fallback',
+        errorReason: parsed.reason ?? 'Runtime response did not match the Workorder Agent payload envelope',
+        requestedAt,
+        completedAt,
+        payload: parsed.payload,
+        diagnostics: parsed.diagnostics,
+      };
+    }
+
     return {
       status: 'success',
       source: 'runtime',
-      payload,
+      payload: parsed.payload,
       requestedAt,
       completedAt,
+      diagnostics: parsed.diagnostics,
     };
   } catch (error) {
     const completedAt = now();
     if (isAbortError(error)) {
-      return runtimeFailure('timeout', `Workorder Agent runtime request timed out after ${timeoutMs} ms`, request, requestedAt, completedAt);
+      return runtimeFailure(
+        'timeout',
+        'runtime_timeout',
+        `Workorder Agent runtime request timed out after ${timeoutMs} ms`,
+        { ...baseDiagnostics, error_code: 'runtime_timeout' },
+        requestedAt,
+        completedAt,
+      );
     }
-    return runtimeFailure('error', error instanceof Error ? error.message : 'Workorder Agent runtime request failed', request, requestedAt, completedAt);
+    return runtimeFailure(
+      'error',
+      'runtime_error',
+      error instanceof Error ? error.message : 'Workorder Agent runtime request failed',
+      { ...baseDiagnostics, error_code: 'runtime_error' },
+      requestedAt,
+      completedAt,
+    );
   } finally {
     globalThis.clearTimeout(timeoutId);
   }
@@ -124,17 +176,6 @@ export function buildWorkorderAgentRuntimeUrl(
   return `${normalizedBase}${normalizedPath}`;
 }
 
-function normalizeRuntimeRequest(request: WorkorderAgentRuntimeRequest): WorkorderAgentRuntimeRequest {
-  return {
-    question: request.question.trim(),
-    selected_workorder_id: optionalText(request.selected_workorder_id),
-    machine_id: optionalText(request.machine_id),
-    surface_id: request.surface_id.trim(),
-    request_source: request.request_source.trim(),
-    context_metadata: request.context_metadata ?? {},
-  };
-}
-
 async function parseRuntimeJsonResponse(response: Response): Promise<unknown> {
   const text = await response.text();
   if (!text) {
@@ -150,10 +191,12 @@ async function parseRuntimeJsonResponse(response: Response): Promise<unknown> {
 
 function runtimeFailure(
   status: WorkorderAgentRuntimeFailure['status'],
+  code: string,
   errorReason: string,
-  request: WorkorderAgentRuntimeRequest,
+  diagnostics: WorkorderRuntimeContractDiagnostics,
   requestedAt: string,
   completedAt: string,
+  severity: 'info' | 'warning' | 'error' = 'error',
 ): WorkorderAgentRuntimeFailure {
   return {
     status,
@@ -161,48 +204,13 @@ function runtimeFailure(
     errorReason,
     requestedAt,
     completedAt,
-    payload: {
-      payload_type: 'workorder_agent_response',
-      intent: 'workorder_insight',
-      error: {
-        code: `runtime_${status}`,
-        message: errorReason,
-      },
-      diagnostics: [{
-        code: `runtime_${status}`,
-        message: errorReason,
-        severity: status === 'disabled' ? 'info' : 'error',
-        section: 'runtime_fetch',
-      }],
-      trace_metadata: {
-        payload_version: 'unknown',
-      },
-      request_context: {
-        surface_id: request.surface_id,
-        request_source: request.request_source,
-      },
-    },
+    payload: buildWorkorderRuntimeDiagnosticPayload(code, errorReason, severity, diagnostics),
+    diagnostics,
   };
-}
-
-function getRuntimeErrorReason(payload: unknown): string | undefined {
-  const record = getRecord(payload);
-  const error = getRecord(record?.error);
-  return optionalText(error?.message) ?? optionalText(record?.message) ?? optionalText(record?.error);
 }
 
 function normalizeTimeoutMs(value: number): number {
   return Number.isFinite(value) && value > 0 ? value : 10000;
-}
-
-function optionalText(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function getRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
 }
 
 function isAbortError(error: unknown): boolean {
