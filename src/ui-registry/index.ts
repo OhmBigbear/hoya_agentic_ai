@@ -41,3 +41,10 @@ export {
   validateWidget,
   validateWidgetList,
 } from './validation';
+
+export {
+  maintenanceWorkordersActionTargetIds,
+  maintenanceWorkordersRegionIds,
+  maintenanceWorkordersSurface,
+  maintenanceWorkordersSurfaceId,
+} from './surfaces/maintenanceWorkordersSurface';
