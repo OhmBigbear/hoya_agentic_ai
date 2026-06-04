@@ -28,13 +28,14 @@ export function buildWorkorderWidgetPreviewModel(payload: unknown): WorkorderWid
     const detectedActions = getActionDiagnosticsFromNormalized(normalized);
     const rejectedActionCount = detectedActions.filter((action) => !action.valid).length;
     const rejectedWidgetCount = normalized.rejectedWidgets.length;
+    const hasPayloadError = Boolean(normalized.error);
 
     return {
       widgets,
       diagnostics: {
         adaptedWidgetCount: widgets.length,
-        validationValid: validation.valid && rejectedActionCount === 0 && rejectedWidgetCount === 0,
-        errorCount: validation.errors.length,
+        validationValid: validation.valid && rejectedActionCount === 0 && rejectedWidgetCount === 0 && !hasPayloadError,
+        errorCount: validation.errors.length + (hasPayloadError ? 1 : 0),
         warningCount: validation.warnings.length + normalized.runtimeDiagnostics.length,
         detectedActions,
         actionValidationValid: rejectedActionCount === 0,

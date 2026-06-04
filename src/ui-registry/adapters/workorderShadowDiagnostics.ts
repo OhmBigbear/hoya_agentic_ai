@@ -59,6 +59,7 @@ export function buildWorkorderWidgetShadowDiagnostics(
       identity,
       getActionDiagnosticsFromNormalized(normalized),
       getRuntimeDiagnosticsFromNormalized(normalized),
+      Boolean(normalized.error),
     );
   } catch (error) {
     options.onError?.(error);
@@ -85,13 +86,14 @@ function diagnosticsFromValidation(
   identity: Pick<WorkorderWidgetShadowDiagnostics, 'lastPayloadType' | 'intent'>,
   detectedActions: WorkorderReadonlyActionDiagnostics[],
   runtimeDiagnostics: Pick<WorkorderWidgetShadowDiagnostics, 'runtimeDiagnostics' | 'rejectedWidgets' | 'traceMetadata'>,
+  hasPayloadError = false,
 ): WorkorderWidgetShadowDiagnostics {
   const rejectedActionCount = detectedActions.filter((action) => !action.valid).length;
 
   return {
     adaptedWidgetCount,
-    validationValid: validation.valid && rejectedActionCount === 0,
-    errorCount: validation.errors.length,
+    validationValid: validation.valid && rejectedActionCount === 0 && !hasPayloadError,
+    errorCount: validation.errors.length + (hasPayloadError ? 1 : 0),
     warningCount: validation.warnings.length,
     ...identity,
     detectedActions,

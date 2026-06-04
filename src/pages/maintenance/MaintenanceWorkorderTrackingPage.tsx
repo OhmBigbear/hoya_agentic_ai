@@ -52,13 +52,20 @@ import {
   buildWorkorderWidgetPreviewModel,
   buildWorkorderWidgetShadowDiagnostics,
   executeReadonlyActionNoop,
+  isWorkorderAgentPayloadLike,
   maintenanceWorkordersSurface,
+  maintenanceWorkordersSurfaceId,
   renderUiWidgetList,
   readonlyActionExecutionPolicy,
   type ActionExecutionResult,
   type UiReadonlyActionEvent,
   type WorkorderWidgetShadowDiagnostics,
 } from '../../ui-registry';
+import {
+  requestWorkorderAgentRuntime,
+  type WorkorderAgentRuntimeRequest,
+  type WorkorderAgentRuntimeResult,
+} from '../../services/workorderAgentRuntimeApi';
 import type {
   MaintenanceDashboardSummary,
   MaintenanceHoldHistory,
@@ -85,6 +92,7 @@ interface MaintenanceWorkorderTrackingPageProps {
 
 interface MaintenanceWorkorderTrackingServices {
   requestOperationsWorkspacePreview?: (request: OperationsWorkspacePreviewRequest) => Promise<OperationsWorkspacePreviewResponse>;
+  requestWorkorderAgentRuntime?: (request: WorkorderAgentRuntimeRequest) => Promise<WorkorderAgentRuntimeResult>;
 }
 
 interface DetailState {
@@ -110,6 +118,15 @@ interface ActionResult {
   action: UiActionPreview;
   status: 'applied' | 'rejected' | 'ignored';
   reason?: string;
+}
+
+interface RuntimeFetchDiagnosticsState {
+  status: 'idle' | 'loading' | WorkorderAgentRuntimeResult['status'] | 'invalid_response';
+  source: 'fixture' | WorkorderAgentRuntimeResult['source'];
+  requestedAt?: string;
+  completedAt?: string;
+  errorReason?: string;
+  payload?: unknown;
 }
 
 export interface WorkorderFilters {
@@ -171,8 +188,13 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
   const [copilotError, setCopilotError] = useState<string | null>(null);
   const operationsWorkspace = useOperationsWorkspaceRuntime();
   const previewRequest = services.requestOperationsWorkspacePreview ?? requestOperationsWorkspacePreview;
+  const runtimeRequest = services.requestWorkorderAgentRuntime ?? requestWorkorderAgentRuntime;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [, setWorkorderWidgetShadowDiagnostics] = useState<WorkorderWidgetShadowDiagnostics | null>(null);
+  const [runtimeFetchDiagnostics, setRuntimeFetchDiagnostics] = useState<RuntimeFetchDiagnosticsState>({
+    status: 'idle',
+    source: 'fixture',
+  });
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -430,6 +452,54 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
     }
   };
 
+  const handleRuntimeFetch = useCallback(async () => {
+    const question = inputMessage.trim() || 'Summarize current maintenance blockers';
+    setRuntimeFetchDiagnostics({
+      status: 'loading',
+      source: 'fallback',
+      requestedAt: new Date().toISOString(),
+    });
+
+    const result = await runtimeRequest({
+      question,
+      selected_workorder_id: operationsWorkspace.state.selectedWorkorderId ?? selectedWorkorder?.workorder_no,
+      machine_id: operationsWorkspace.state.selectedMachineId ?? selectedWorkorder?.equipment_no,
+      surface_id: maintenanceWorkordersSurfaceId,
+      request_source: 'hoya_ui.developer_diagnostics',
+      context_metadata: {
+        filters: buildOperationsWorkspacePreviewFilters(filters, operationsWorkspace.state, selectedWorkorder),
+        workspace_state: {
+          selected_workorder_id: operationsWorkspace.state.selectedWorkorderId,
+          selected_machine_id: operationsWorkspace.state.selectedMachineId,
+          selected_insight_id: operationsWorkspace.state.selectedInsightId,
+          focused_chart_id: operationsWorkspace.state.focusedChartId,
+          time_range: operationsWorkspace.state.synchronizedTimeRange?.value ?? operationsWorkspace.state.timeRange,
+        },
+      },
+    });
+
+    if (result.status === 'success' && !isWorkorderAgentPayloadLike(result.payload)) {
+      setRuntimeFetchDiagnostics({
+        status: 'invalid_response',
+        source: 'fallback',
+        requestedAt: result.requestedAt,
+        completedAt: result.completedAt,
+        errorReason: 'Runtime response did not match the Workorder Agent payload envelope',
+        payload: buildRuntimeDiagnosticPayload('runtime_invalid_response', 'Runtime response did not match the Workorder Agent payload envelope'),
+      });
+      return;
+    }
+
+    setRuntimeFetchDiagnostics({
+      status: result.status,
+      source: result.source,
+      requestedAt: result.requestedAt,
+      completedAt: result.completedAt,
+      errorReason: result.status === 'success' ? undefined : result.errorReason,
+      payload: result.payload,
+    });
+  }, [filters, inputMessage, operationsWorkspace.state, runtimeRequest, selectedWorkorder]);
+
   return (
     <main
       className="fixed top-16 right-0 bottom-0 bg-[#0a0f1e] overflow-hidden transition-all duration-300"
@@ -500,6 +570,8 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
           copilotError={copilotError}
           workspaceState={operationsWorkspace.state}
           onInsightSelected={handleInsightSelected}
+          runtimeFetchDiagnostics={runtimeFetchDiagnostics}
+          onRuntimeFetch={handleRuntimeFetch}
         />
 
         <WorkorderDetailDrawer
@@ -1088,6 +1160,8 @@ export function MaintenanceAssistantPanel({
   copilotError = null,
   workspaceState,
   onInsightSelected = () => {},
+  runtimeFetchDiagnostics,
+  onRuntimeFetch,
 }: {
   isOpen: boolean;
   onClose: () => void;
@@ -1101,6 +1175,8 @@ export function MaintenanceAssistantPanel({
   copilotError?: string | null;
   workspaceState?: ReturnType<typeof useOperationsWorkspaceRuntime>['state'];
   onInsightSelected?: (insight: Insight) => void;
+  runtimeFetchDiagnostics?: RuntimeFetchDiagnosticsState;
+  onRuntimeFetch?: () => Promise<void>;
 }) {
   return (
     <div
@@ -1168,6 +1244,8 @@ export function MaintenanceAssistantPanel({
                       message={message}
                       activeInsightIds={workspaceState?.activeInsightIds ?? []}
                       onInsightSelected={onInsightSelected}
+                      runtimeFetchDiagnostics={runtimeFetchDiagnostics}
+                      onRuntimeFetch={onRuntimeFetch}
                     />
                   )}
                 </div>
@@ -1247,10 +1325,14 @@ function AssistantStructuredBlocks({
   message,
   activeInsightIds = [],
   onInsightSelected = () => {},
+  runtimeFetchDiagnostics,
+  onRuntimeFetch,
 }: {
   message: ChatMessage;
   activeInsightIds?: string[];
   onInsightSelected?: (insight: Insight) => void;
+  runtimeFetchDiagnostics?: RuntimeFetchDiagnosticsState;
+  onRuntimeFetch?: () => Promise<void>;
 }) {
   const hasInsights = Boolean(message.insights?.length);
   const hasActions = Boolean(message.uiActions?.length);
@@ -1264,7 +1346,12 @@ function AssistantStructuredBlocks({
     <div className="mt-3 space-y-3 border-t border-white/10 pt-3">
       {message.workspacePayload && <WorkspacePayloadInsight payload={message.workspacePayload} />}
       {WORKORDER_WIDGET_SHADOW_MODE_ENABLED && WORKORDER_WIDGET_DEV_PREVIEW_ENABLED && message.workspacePayload && (
-        <DeveloperWidgetRegistryPreview payload={message.workspacePayload} />
+        <DeveloperWidgetRegistryPreview
+          payload={runtimeFetchDiagnostics?.payload ?? message.workspacePayload}
+          source={runtimeFetchDiagnostics?.source ?? 'fixture'}
+          runtimeStatus={runtimeFetchDiagnostics}
+          onRuntimeFetch={onRuntimeFetch}
+        />
       )}
       {hasInsights && (
         <div className="space-y-2">
@@ -1308,13 +1395,30 @@ function AssistantStructuredBlocks({
   );
 }
 
-export function DeveloperWidgetRegistryPreview({ payload }: { payload?: unknown }) {
+export function DeveloperWidgetRegistryPreview({
+  payload,
+  source = 'fixture',
+  runtimeStatus,
+  onRuntimeFetch,
+}: {
+  payload?: unknown;
+  source?: RuntimeFetchDiagnosticsState['source'];
+  runtimeStatus?: RuntimeFetchDiagnosticsState;
+  onRuntimeFetch?: () => Promise<void>;
+}) {
   const model = useMemo(() => (payload ? buildWorkorderWidgetPreviewModel(payload) : null), [payload]);
+  const isRuntimeLoading = runtimeStatus?.status === 'loading';
 
   if (!model) {
     return (
       <div className="rounded border border-dashed border-cyan-400/30 bg-[#0f1623] p-2" data-testid="developer-widget-registry-preview">
         <p className="text-[11px] uppercase text-cyan-300/80">Developer Widget Registry Preview</p>
+        <RuntimeFetchDiagnosticsPanel
+          source={source}
+          runtimeStatus={runtimeStatus}
+          isRuntimeLoading={isRuntimeLoading}
+          onRuntimeFetch={onRuntimeFetch}
+        />
         <p className="mt-1 text-xs text-slate-400">No workspace payload available for widget preview.</p>
       </div>
     );
@@ -1333,6 +1437,12 @@ export function DeveloperWidgetRegistryPreview({ payload }: { payload?: unknown 
           {diagnostics.validationValid ? 'valid' : 'review'}
         </Badge>
       </div>
+      <RuntimeFetchDiagnosticsPanel
+        source={source}
+        runtimeStatus={runtimeStatus}
+        isRuntimeLoading={isRuntimeLoading}
+        onRuntimeFetch={onRuntimeFetch}
+      />
       <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-400">
         <div>Widgets {diagnostics.adaptedWidgetCount}</div>
         <div>Errors {diagnostics.errorCount}</div>
@@ -1404,6 +1514,64 @@ export function DeveloperWidgetRegistryPreview({ payload }: { payload?: unknown 
       </div>
     </div>
   );
+}
+
+function RuntimeFetchDiagnosticsPanel({
+  source,
+  runtimeStatus,
+  isRuntimeLoading,
+  onRuntimeFetch,
+}: {
+  source: RuntimeFetchDiagnosticsState['source'];
+  runtimeStatus?: RuntimeFetchDiagnosticsState;
+  isRuntimeLoading: boolean;
+  onRuntimeFetch?: () => Promise<void>;
+}) {
+  return (
+    <div className="mt-2 rounded border border-white/10 bg-[#101827] p-2 text-[11px] text-slate-400">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <p className="text-slate-300">Runtime fetch</p>
+          <p>status {runtimeStatus?.status ?? 'idle'} source {source}</p>
+        </div>
+        {onRuntimeFetch ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 border-cyan-400/30 px-2 text-[11px] text-cyan-200 hover:bg-cyan-500/10 hover:text-cyan-100"
+            onClick={() => { void onRuntimeFetch(); }}
+            disabled={isRuntimeLoading}
+          >
+            {isRuntimeLoading ? 'Fetching' : 'Fetch runtime'}
+          </Button>
+        ) : null}
+      </div>
+      {runtimeStatus?.errorReason ? <p className="mt-1 break-words text-amber-200">reason {runtimeStatus.errorReason}</p> : null}
+      {runtimeStatus?.requestedAt ? <p className="mt-1">requested_at {runtimeStatus.requestedAt}</p> : null}
+      {runtimeStatus?.completedAt ? <p>completed_at {runtimeStatus.completedAt}</p> : null}
+    </div>
+  );
+}
+
+function buildRuntimeDiagnosticPayload(code: string, message: string): unknown {
+  return {
+    payload_type: 'workorder_agent_response',
+    intent: 'workorder_insight',
+    error: {
+      code,
+      message,
+    },
+    diagnostics: [{
+      code,
+      message,
+      severity: 'error',
+      section: 'runtime_fetch',
+    }],
+    trace_metadata: {
+      payload_version: 'unknown',
+    },
+  };
 }
 
 export function handleDeveloperReadonlyAction(event: UiReadonlyActionEvent): ActionExecutionResult {

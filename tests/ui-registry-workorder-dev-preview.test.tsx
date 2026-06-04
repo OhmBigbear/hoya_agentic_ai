@@ -134,15 +134,48 @@ describe('workorder widget developer preview', () => {
 
   it('renders runtime trace metadata in developer diagnostics', () => {
     const markup = renderToStaticMarkup(
-      <DeveloperWidgetRegistryPreview payload={runtimeWorkorderAgentResponse} />,
+      <DeveloperWidgetRegistryPreview payload={runtimeWorkorderAgentResponse} source="runtime" runtimeStatus={{
+        status: 'success',
+        source: 'runtime',
+        requestedAt: '2026-06-05T00:00:00.000Z',
+        completedAt: '2026-06-05T00:00:01.000Z',
+        payload: runtimeWorkorderAgentResponse,
+      }} />,
     );
 
     expect(markup).toContain('Trace metadata');
+    expect(markup).toContain('Runtime fetch');
+    expect(markup).toContain('status success source runtime');
     expect(markup).toContain('trace_id trace-runtime-workorder-021');
     expect(markup).toContain('agent_id maint-workorder-agent');
     expect(markup).toContain('run_id run-runtime-021-b07');
     expect(markup).toContain('payload_version 2.0');
     expect(markup).toContain('Runtime diagnostics');
+  });
+
+  it('renders disabled fallback runtime diagnostics without a backend call', () => {
+    const markup = renderToStaticMarkup(
+      <DeveloperWidgetRegistryPreview payload={{
+        payload_type: 'workorder_agent_response',
+        intent: 'workorder_insight',
+        error: { code: 'runtime_disabled', message: 'Workorder Agent runtime endpoint is not configured' },
+        diagnostics: [{
+          code: 'runtime_disabled',
+          message: 'Workorder Agent runtime endpoint is not configured',
+          severity: 'info',
+          section: 'runtime_fetch',
+        }],
+      }} source="fallback" runtimeStatus={{
+        status: 'disabled',
+        source: 'fallback',
+        errorReason: 'Workorder Agent runtime endpoint is not configured',
+      }} />,
+    );
+
+    expect(markup).toContain('status disabled source fallback');
+    expect(markup).toContain('reason Workorder Agent runtime endpoint is not configured');
+    expect(markup).toContain('runtime_disabled');
+    expect(markup).toContain('Workorder Agent runtime endpoint is not configured');
   });
 
   it('keeps readonly action clicks as dev-only no-ops without API calls or mutation', () => {
