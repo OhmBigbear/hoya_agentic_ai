@@ -75,3 +75,11 @@ export type {
   NormalizedWorkorderAgentPayload,
   WorkorderAgentPayloadAdapterOptions,
 } from './adapters/workorderAgentPayloadAdapter';
+
+export {
+  buildWorkorderWidgetShadowDiagnostics,
+} from './adapters/workorderShadowDiagnostics';
+export type {
+  WorkorderWidgetShadowDiagnostics,
+  WorkorderWidgetShadowDiagnosticsOptions,
+} from './adapters/workorderShadowDiagnostics';

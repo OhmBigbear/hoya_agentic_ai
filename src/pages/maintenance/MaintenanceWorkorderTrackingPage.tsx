@@ -48,6 +48,10 @@ import {
   getWorkorderTracking,
 } from '../../services/maintenanceWorkorderApi';
 import { requestOperationsWorkspacePreview } from '../../services/operationsWorkspaceCopilotApi';
+import {
+  buildWorkorderWidgetShadowDiagnostics,
+  type WorkorderWidgetShadowDiagnostics,
+} from '../../ui-registry';
 import type {
   MaintenanceDashboardSummary,
   MaintenanceHoldHistory,
@@ -122,6 +126,7 @@ const defaultFilters: WorkorderFilters = {
 };
 
 const pageSize = 12;
+const WORKORDER_WIDGET_SHADOW_MODE_ENABLED = false;
 
 const emptySummary: MaintenanceDashboardSummary = {
   open_workorder_count: 0,
@@ -159,6 +164,7 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
   const operationsWorkspace = useOperationsWorkspaceRuntime();
   const previewRequest = services.requestOperationsWorkspacePreview ?? requestOperationsWorkspacePreview;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [, setWorkorderWidgetShadowDiagnostics] = useState<WorkorderWidgetShadowDiagnostics | null>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -375,6 +381,15 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
         filters: buildOperationsWorkspacePreviewFilters(filters, operationsWorkspace.state, selectedWorkorder),
         limit: 5,
       });
+      if (WORKORDER_WIDGET_SHADOW_MODE_ENABLED) {
+        setWorkorderWidgetShadowDiagnostics(buildWorkorderWidgetShadowDiagnostics(preview.workspace_payload, {
+          onError: (shadowError) => {
+            if (import.meta.env.DEV) {
+              console.warn('Workorder widget shadow diagnostics failed', shadowError);
+            }
+          },
+        }));
+      }
       const actionResults = applyLiveUiActions(preview.ui_actions);
 
       setMessages((current) => [
@@ -1103,7 +1118,7 @@ export function MaintenanceAssistantPanel({
         </div>
 
         <div className="p-3 bg-[#141b2e] border border-white/10 rounded-lg">
-          <p className="text-xs font-medium text-slate-400 mb-2">Quick Insights:</p>
+          <p className="text-xs font-medium text-slate-400 mb-2">Existing operational signal snapshot:</p>
           <div className="space-y-2">
             <div className="flex items-start gap-2 text-xs">
               <AlertTriangle className="w-3 h-3 text-red-400 flex-shrink-0 mt-0.5" />
