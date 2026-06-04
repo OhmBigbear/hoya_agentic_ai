@@ -43,6 +43,23 @@ export {
 } from './validation';
 
 export {
+  EmptyWidgetFallback,
+  InvalidWidgetFallback,
+  UnsupportedWidgetFallback,
+  WidgetValidationMessages,
+} from './WidgetFallback';
+export type { UiWidgetFallbackMode } from './WidgetFallback';
+
+export {
+  renderUiWidget,
+  renderUiWidgetList,
+} from './renderWidget';
+export type {
+  RenderUiWidgetOptions,
+  UiReadonlyActionEvent,
+} from './renderWidget';
+
+export {
   maintenanceWorkordersActionTargetIds,
   maintenanceWorkordersRegionIds,
   maintenanceWorkordersSurface,
