@@ -140,6 +140,11 @@ describe('workorder widget developer preview', () => {
         requestedAt: '2026-06-05T00:00:00.000Z',
         completedAt: '2026-06-05T00:00:01.000Z',
         payload: runtimeWorkorderAgentResponse,
+        endpointUrl: 'https://agentic-core.example.com/api/workorder-agent/runtime',
+        endpointPath: '/api/workorder-agent/runtime',
+        clientTraceId: 'client-trace-021-b09',
+        runtimeTraceId: 'trace-runtime-workorder-021',
+        payloadVersion: '2.0',
       }} />,
     );
 
@@ -150,6 +155,10 @@ describe('workorder widget developer preview', () => {
     expect(markup).toContain('agent_id maint-workorder-agent');
     expect(markup).toContain('run_id run-runtime-021-b07');
     expect(markup).toContain('payload_version 2.0');
+    expect(markup).toContain('endpoint_url https://agentic-core.example.com/api/workorder-agent/runtime');
+    expect(markup).toContain('endpoint_path /api/workorder-agent/runtime');
+    expect(markup).toContain('client_trace_id client-trace-021-b09');
+    expect(markup).toContain('runtime_trace_id trace-runtime-workorder-021');
     expect(markup).toContain('Runtime diagnostics');
   });
 
