@@ -97,6 +97,10 @@ export {
 export type {
   NormalizedWorkorderAgentPayload,
   WorkorderAgentPayloadAdapterOptions,
+  WorkorderAgentRuntimeEnvelope,
+  WorkorderRuntimeDiagnostic,
+  WorkorderRuntimeRejectedWidget,
+  WorkorderRuntimeTraceMetadata,
 } from './adapters/workorderAgentPayloadAdapter';
 
 export {

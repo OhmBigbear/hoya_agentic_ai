@@ -1308,7 +1308,7 @@ function AssistantStructuredBlocks({
   );
 }
 
-export function DeveloperWidgetRegistryPreview({ payload }: { payload?: WorkspacePayload }) {
+export function DeveloperWidgetRegistryPreview({ payload }: { payload?: unknown }) {
   const model = useMemo(() => (payload ? buildWorkorderWidgetPreviewModel(payload) : null), [payload]);
 
   if (!model) {
@@ -1340,6 +1340,15 @@ export function DeveloperWidgetRegistryPreview({ payload }: { payload?: Workspac
         <div>Type {diagnostics.lastPayloadType ?? 'unknown'}</div>
         <div className="col-span-2">Intent {diagnostics.intent ?? 'unknown'}</div>
       </div>
+      <div className="mt-2 rounded border border-white/10 bg-[#101827] p-2 text-[11px] text-slate-400">
+        <p className="mb-1 text-slate-300">Trace metadata</p>
+        <div className="grid grid-cols-1 gap-1 break-words">
+          <div>trace_id {diagnostics.traceMetadata?.trace_id ?? 'unknown'}</div>
+          <div>agent_id {diagnostics.traceMetadata?.agent_id ?? 'unknown'}</div>
+          <div>run_id {diagnostics.traceMetadata?.run_id ?? 'unknown'}</div>
+          <div>payload_version {diagnostics.traceMetadata?.payload_version ?? 'unknown'}</div>
+        </div>
+      </div>
       <div className="mt-2 rounded border border-white/10 bg-[#101827] p-2 text-[11px] text-slate-300">
         <div className="mb-2 grid grid-cols-2 gap-1 text-slate-400">
           <div>Execution {diagnostics.executionPolicy.executionMode}</div>
@@ -1368,6 +1377,23 @@ export function DeveloperWidgetRegistryPreview({ payload }: { payload?: Workspac
         ) : (
           <p className="mt-1 text-slate-500">No actions detected.</p>
         )}
+        {diagnostics.runtimeDiagnostics.length > 0 ? (
+          <div className="mt-2 border-t border-white/10 pt-2">
+            <span>Runtime diagnostics {diagnostics.runtimeDiagnostics.length}</span>
+            <ul className="mt-1 space-y-1">
+              {diagnostics.runtimeDiagnostics.map((diagnostic, index) => (
+                <li key={`${diagnostic.code}-${index}`} className="break-words">
+                  <span className={diagnostic.severity === 'error' ? 'text-red-200' : diagnostic.severity === 'warning' ? 'text-amber-200' : 'text-slate-300'}>
+                    {diagnostic.severity}
+                  </span>
+                  <span> {diagnostic.code}</span>
+                  {diagnostic.section ? <span> section {diagnostic.section}</span> : null}
+                  <span> {diagnostic.message}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </div>
       <div className="mt-3 rounded border border-white/10 bg-[#141b2e] p-2 text-xs text-slate-300">
         {model.safeToRender ? renderUiWidgetList(model.widgets, {

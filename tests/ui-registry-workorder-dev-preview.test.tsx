@@ -17,6 +17,7 @@ import type { WorkspacePayload } from '../src/types/operationsWorkspace';
 import {
   fullWorkorderAgentPayload,
   malformedWorkorderAgentPayload,
+  runtimeWorkorderAgentResponse,
   unsupportedActionWorkorderAgentPayload,
 } from './fixtures/ui-registry/workorder-agent-payload.fixture';
 
@@ -129,6 +130,19 @@ describe('workorder widget developer preview', () => {
     expect(markup).toContain('rejected');
     expect(markup).toContain('Action &#x27;inspect_unknown&#x27; is not registered');
     expect(markup).toContain('Action &#x27;delete_workorder&#x27; looks like a write operation');
+  });
+
+  it('renders runtime trace metadata in developer diagnostics', () => {
+    const markup = renderToStaticMarkup(
+      <DeveloperWidgetRegistryPreview payload={runtimeWorkorderAgentResponse} />,
+    );
+
+    expect(markup).toContain('Trace metadata');
+    expect(markup).toContain('trace_id trace-runtime-workorder-021');
+    expect(markup).toContain('agent_id maint-workorder-agent');
+    expect(markup).toContain('run_id run-runtime-021-b07');
+    expect(markup).toContain('payload_version 2.0');
+    expect(markup).toContain('Runtime diagnostics');
   });
 
   it('keeps readonly action clicks as dev-only no-ops without API calls or mutation', () => {

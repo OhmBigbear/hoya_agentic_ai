@@ -6,6 +6,9 @@ import { validateWidgetList } from '../validation';
 import {
   adaptWorkorderAgentPayloadToWidgets,
   normalizeWorkorderAgentPayload,
+  type WorkorderRuntimeDiagnostic,
+  type WorkorderRuntimeRejectedWidget,
+  type WorkorderRuntimeTraceMetadata,
 } from './workorderAgentPayloadAdapter';
 
 export interface WorkorderReadonlyActionDiagnostics {
@@ -30,6 +33,9 @@ export interface WorkorderWidgetShadowDiagnostics {
   actionValidationValid: boolean;
   rejectedActionCount: number;
   executionPolicy: ActionExecutionPolicyMetadata;
+  runtimeDiagnostics: WorkorderRuntimeDiagnostic[];
+  rejectedWidgets: WorkorderRuntimeRejectedWidget[];
+  traceMetadata?: WorkorderRuntimeTraceMetadata;
 }
 
 export interface WorkorderWidgetShadowDiagnosticsOptions {
@@ -43,10 +49,17 @@ export function buildWorkorderWidgetShadowDiagnostics(
   const identity = getPayloadIdentity(payload);
 
   try {
+    const normalized = normalizeWorkorderAgentPayload(payload);
     const widgets = adaptWorkorderAgentPayloadToWidgets(payload);
     const validation = validateWidgetList(widgets, maintenanceWorkordersSurface);
 
-    return diagnosticsFromValidation(widgets.length, validation, identity, getActionDiagnostics(payload));
+    return diagnosticsFromValidation(
+      widgets.length,
+      validation,
+      identity,
+      getActionDiagnosticsFromNormalized(normalized),
+      getRuntimeDiagnosticsFromNormalized(normalized),
+    );
   } catch (error) {
     options.onError?.(error);
     const detectedActions = getActionDiagnostics(payload);
@@ -61,6 +74,7 @@ export function buildWorkorderWidgetShadowDiagnostics(
       actionValidationValid: rejectedActionCount === 0,
       rejectedActionCount,
       executionPolicy: readonlyActionExecutionPolicy,
+      ...getRuntimeDiagnostics(payload),
     };
   }
 }
@@ -70,6 +84,7 @@ function diagnosticsFromValidation(
   validation: UiValidationResult,
   identity: Pick<WorkorderWidgetShadowDiagnostics, 'lastPayloadType' | 'intent'>,
   detectedActions: WorkorderReadonlyActionDiagnostics[],
+  runtimeDiagnostics: Pick<WorkorderWidgetShadowDiagnostics, 'runtimeDiagnostics' | 'rejectedWidgets' | 'traceMetadata'>,
 ): WorkorderWidgetShadowDiagnostics {
   const rejectedActionCount = detectedActions.filter((action) => !action.valid).length;
 
@@ -83,34 +98,70 @@ function diagnosticsFromValidation(
     actionValidationValid: rejectedActionCount === 0,
     rejectedActionCount,
     executionPolicy: readonlyActionExecutionPolicy,
+    ...runtimeDiagnostics,
+  };
+}
+
+function getRuntimeDiagnostics(payload: unknown): Pick<WorkorderWidgetShadowDiagnostics, 'runtimeDiagnostics' | 'rejectedWidgets' | 'traceMetadata'> {
+  try {
+    return getRuntimeDiagnosticsFromNormalized(normalizeWorkorderAgentPayload(payload));
+  } catch {
+    return {
+      runtimeDiagnostics: [],
+      rejectedWidgets: [],
+    };
+  }
+}
+
+function getRuntimeDiagnosticsFromNormalized(
+  normalized: ReturnType<typeof normalizeWorkorderAgentPayload>,
+): Pick<WorkorderWidgetShadowDiagnostics, 'runtimeDiagnostics' | 'rejectedWidgets' | 'traceMetadata'> {
+  return {
+    runtimeDiagnostics: normalized.runtimeDiagnostics,
+    rejectedWidgets: normalized.rejectedWidgets,
+    traceMetadata: normalized.traceMetadata,
   };
 }
 
 function getActionDiagnostics(payload: unknown): WorkorderReadonlyActionDiagnostics[] {
   try {
-    return normalizeWorkorderAgentPayload(payload).actions.map((action) => ({
-      actionId: action.actionId,
-      label: action.label,
-      mode: action.mode,
-      targetId: action.targetId,
-      valid: action.valid,
-      status: action.status,
-      rejectionReason: action.rejectionReason,
-      executionPolicy: readonlyActionExecutionPolicy,
-    }));
+    return getActionDiagnosticsFromNormalized(normalizeWorkorderAgentPayload(payload));
   } catch {
     return [];
   }
 }
 
-function getPayloadIdentity(payload: unknown): Pick<WorkorderWidgetShadowDiagnostics, 'lastPayloadType' | 'intent'> {
-  const root = getRecord(payload);
-  const record = getRecord(root?.workspace_payload) ?? root;
+function getActionDiagnosticsFromNormalized(
+  normalized: ReturnType<typeof normalizeWorkorderAgentPayload>,
+): WorkorderReadonlyActionDiagnostics[] {
+  return normalized.actions.map((action) => ({
+    actionId: action.actionId,
+    label: action.label,
+    mode: action.mode,
+    targetId: action.targetId,
+    valid: action.valid,
+    status: action.status,
+    rejectionReason: action.rejectionReason,
+    executionPolicy: readonlyActionExecutionPolicy,
+  }));
+}
 
-  return {
-    lastPayloadType: getText(record?.payload_type),
-    intent: getText(record?.intent),
-  };
+function getPayloadIdentity(payload: unknown): Pick<WorkorderWidgetShadowDiagnostics, 'lastPayloadType' | 'intent'> {
+  try {
+    const normalized = normalizeWorkorderAgentPayload(payload);
+    return {
+      lastPayloadType: normalized.payloadType,
+      intent: normalized.intent,
+    };
+  } catch {
+    const root = getRecord(payload);
+    const record = getRecord(root?.workspace_payload) ?? root;
+
+    return {
+      lastPayloadType: getText(record?.payload_type),
+      intent: getText(record?.intent),
+    };
+  }
 }
 
 function getRecord(value: unknown): Record<string, unknown> | undefined {

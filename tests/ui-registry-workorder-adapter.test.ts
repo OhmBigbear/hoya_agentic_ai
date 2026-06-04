@@ -10,11 +10,18 @@ import {
   maintenanceWorkordersActionTargetIds,
   maintenanceWorkordersRegionIds,
   maintenanceWorkordersSurface,
+  normalizeWorkorderAgentPayload,
   readonlyActionExecutionPolicy,
   validateAgentReadonlyAction,
   validateWidget,
 } from '../src/ui-registry';
 import type { UiWidget } from '../src/ui-registry';
+import {
+  fullWorkorderAgentPayload,
+  runtimeWorkorderAgentResponse,
+  unsafeRuntimeWorkorderAgentResponse,
+  unknownWidgetRuntimeWorkorderAgentResponse,
+} from './fixtures/ui-registry/workorder-agent-payload.fixture';
 
 const basePayload = {
   payload_version: '1.0',
@@ -52,6 +59,7 @@ describe('workorder agent payload adapter', () => {
   it('detects valid object-like payload', () => {
     expect(isWorkorderAgentPayloadLike(basePayload)).toBe(true);
     expect(isWorkorderAgentPayloadLike({ workspace_payload: basePayload })).toBe(true);
+    expect(isWorkorderAgentPayloadLike(runtimeWorkorderAgentResponse)).toBe(true);
     expect(isWorkorderAgentPayloadLike({ unrelated: true })).toBe(false);
   });
 
@@ -365,6 +373,62 @@ describe('workorder agent payload adapter', () => {
       expect(maintenanceWorkordersRegionIds).toContain(widget.regionId);
       expect(allowedWidgetTypes.has(widget.type)).toBe(true);
     });
+    assertAllWidgetsValid(widgets);
+  });
+
+  it('normalizes a valid Agentic Core runtime payload into registry widgets', () => {
+    const normalized = normalizeWorkorderAgentPayload(runtimeWorkorderAgentResponse);
+    const widgets = adaptWorkorderAgentPayloadToWidgets(runtimeWorkorderAgentResponse);
+
+    expect(normalized.payloadVersion).toBe('2.0');
+    expect(normalized.payloadType).toBe('workorder_agent_response');
+    expect(normalized.traceMetadata).toEqual({
+      trace_id: 'trace-runtime-workorder-021',
+      agent_id: 'maint-workorder-agent',
+      run_id: 'run-runtime-021-b07',
+      payload_version: '2.0',
+    });
+    expect(normalized.runtimeWidgets).toHaveLength(2);
+    expect(normalized.actions.filter((action) => action.valid)).toHaveLength(2);
+    expect(widgets.some((widget) => widget.id === 'runtime-open-workorders')).toBe(true);
+    expect(widgets.some((widget) => widget.id === 'runtime-workorder-table')).toBe(true);
+    assertAllWidgetsValid(widgets);
+  });
+
+  it('keeps unsafe runtime actions in diagnostics only', () => {
+    const normalized = normalizeWorkorderAgentPayload(unsafeRuntimeWorkorderAgentResponse);
+    const widgets = adaptWorkorderAgentPayloadToWidgets(unsafeRuntimeWorkorderAgentResponse);
+    const actionWidget = widgets.find((widget): widget is Extract<UiWidget, { type: 'action_list_readonly' }> => widget.type === 'action_list_readonly');
+
+    expect(normalized.actions.filter((action) => !action.valid).map((action) => action.rejectionCode)).toEqual([
+      'write_like_action_id',
+      'non_readonly_mode',
+    ]);
+    expect(actionWidget?.actions?.map((action) => action.id)).toEqual(['view_workorder']);
+    expect(JSON.stringify(widgets)).not.toContain('delete_workorder');
+    assertAllWidgetsValid(widgets);
+  });
+
+  it('keeps unknown runtime widgets in diagnostics only', () => {
+    const normalized = normalizeWorkorderAgentPayload(unknownWidgetRuntimeWorkorderAgentResponse);
+    const widgets = adaptWorkorderAgentPayloadToWidgets(unknownWidgetRuntimeWorkorderAgentResponse);
+
+    expect(normalized.rejectedWidgets).toHaveLength(2);
+    expect(normalized.runtimeDiagnostics.map((diagnostic) => diagnostic.code)).toContain('runtime_widget_rejected');
+    expect(widgets.some((widget) => widget.id === 'runtime-unsafe-widget')).toBe(false);
+    expect(widgets.some((widget) => widget.id === 'runtime-bad-region')).toBe(false);
+    assertAllWidgetsValid(widgets);
+  });
+
+  it('preserves backward compatibility with existing workspace payload fixtures', () => {
+    const normalized = normalizeWorkorderAgentPayload(fullWorkorderAgentPayload);
+    const widgets = adaptWorkorderAgentPayloadToWidgets(fullWorkorderAgentPayload);
+
+    expect(normalized.payloadType).toBe('workorder_insight');
+    expect(normalized.runtimeDiagnostics).toEqual([]);
+    expect(normalized.rejectedWidgets).toEqual([]);
+    expect(widgets.some((widget) => widget.type === 'summary_card')).toBe(true);
+    expect(widgets.some((widget) => widget.type === 'action_list_readonly')).toBe(true);
     assertAllWidgetsValid(widgets);
   });
 });

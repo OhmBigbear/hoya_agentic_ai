@@ -24,20 +24,25 @@ export function buildWorkorderWidgetPreviewModel(payload: unknown): WorkorderWid
   try {
     const widgets = adaptWorkorderAgentPayloadToWidgets(payload);
     const validation = validateWidgetList(widgets, maintenanceWorkordersSurface);
-    const detectedActions = getActionDiagnostics(payload);
+    const normalized = normalizeWorkorderAgentPayload(payload);
+    const detectedActions = getActionDiagnosticsFromNormalized(normalized);
     const rejectedActionCount = detectedActions.filter((action) => !action.valid).length;
+    const rejectedWidgetCount = normalized.rejectedWidgets.length;
 
     return {
       widgets,
       diagnostics: {
         adaptedWidgetCount: widgets.length,
-        validationValid: validation.valid && rejectedActionCount === 0,
+        validationValid: validation.valid && rejectedActionCount === 0 && rejectedWidgetCount === 0,
         errorCount: validation.errors.length,
-        warningCount: validation.warnings.length,
+        warningCount: validation.warnings.length + normalized.runtimeDiagnostics.length,
         detectedActions,
         actionValidationValid: rejectedActionCount === 0,
         rejectedActionCount,
         executionPolicy: readonlyActionExecutionPolicy,
+        runtimeDiagnostics: normalized.runtimeDiagnostics,
+        rejectedWidgets: normalized.rejectedWidgets,
+        traceMetadata: normalized.traceMetadata,
         ...identity,
       },
       validation,
@@ -62,6 +67,7 @@ export function buildWorkorderWidgetPreviewModel(payload: unknown): WorkorderWid
         actionValidationValid: false,
         rejectedActionCount: detectedActions.filter((action) => !action.valid).length,
         executionPolicy: readonlyActionExecutionPolicy,
+        ...getRuntimeDiagnostics(payload),
         ...identity,
       },
       validation,
@@ -72,29 +78,61 @@ export function buildWorkorderWidgetPreviewModel(payload: unknown): WorkorderWid
 
 function getActionDiagnostics(payload: unknown): WorkorderReadonlyActionDiagnostics[] {
   try {
-    return normalizeWorkorderAgentPayload(payload).actions.map((action) => ({
-      actionId: action.actionId,
-      label: action.label,
-      mode: action.mode,
-      targetId: action.targetId,
-      valid: action.valid,
-      status: action.status,
-      rejectionReason: action.rejectionReason,
-      executionPolicy: readonlyActionExecutionPolicy,
-    }));
+    return getActionDiagnosticsFromNormalized(normalizeWorkorderAgentPayload(payload));
   } catch {
     return [];
   }
 }
 
-function getPayloadIdentity(payload: unknown): Pick<WorkorderWidgetShadowDiagnostics, 'lastPayloadType' | 'intent'> {
-  const root = getRecord(payload);
-  const record = getRecord(root?.workspace_payload) ?? root;
+function getActionDiagnosticsFromNormalized(
+  normalized: ReturnType<typeof normalizeWorkorderAgentPayload>,
+): WorkorderReadonlyActionDiagnostics[] {
+  return normalized.actions.map((action) => ({
+    actionId: action.actionId,
+    label: action.label,
+    mode: action.mode,
+    targetId: action.targetId,
+    valid: action.valid,
+    status: action.status,
+    rejectionReason: action.rejectionReason,
+    executionPolicy: readonlyActionExecutionPolicy,
+  }));
+}
 
-  return {
-    lastPayloadType: getText(record?.payload_type),
-    intent: getText(record?.intent),
-  };
+function getRuntimeDiagnostics(
+  payload: unknown,
+): Pick<WorkorderWidgetShadowDiagnostics, 'runtimeDiagnostics' | 'rejectedWidgets' | 'traceMetadata'> {
+  try {
+    const normalized = normalizeWorkorderAgentPayload(payload);
+    return {
+      runtimeDiagnostics: normalized.runtimeDiagnostics,
+      rejectedWidgets: normalized.rejectedWidgets,
+      traceMetadata: normalized.traceMetadata,
+    };
+  } catch {
+    return {
+      runtimeDiagnostics: [],
+      rejectedWidgets: [],
+    };
+  }
+}
+
+function getPayloadIdentity(payload: unknown): Pick<WorkorderWidgetShadowDiagnostics, 'lastPayloadType' | 'intent'> {
+  try {
+    const normalized = normalizeWorkorderAgentPayload(payload);
+    return {
+      lastPayloadType: normalized.payloadType,
+      intent: normalized.intent,
+    };
+  } catch {
+    const root = getRecord(payload);
+    const record = getRecord(root?.workspace_payload) ?? root;
+
+    return {
+      lastPayloadType: getText(record?.payload_type),
+      intent: getText(record?.intent),
+    };
+  }
 }
 
 function getRecord(value: unknown): Record<string, unknown> | undefined {

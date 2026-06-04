@@ -21,12 +21,47 @@ import {
 import {
   maintenanceWorkordersRegionIds,
   maintenanceWorkordersSurfaceId,
+  maintenanceWorkordersSurface,
 } from '../surfaces/maintenanceWorkordersSurface';
+import { isSupportedWidgetType, validateWidget } from '../validation';
 
 type WorkorderAgentPayloadRecord = Record<string, unknown>;
 
 export interface WorkorderAgentPayloadAdapterOptions {
   emptyMessage?: string;
+}
+
+export interface WorkorderRuntimeTraceMetadata {
+  trace_id?: string;
+  agent_id?: string;
+  run_id?: string;
+  payload_version?: string;
+}
+
+export interface WorkorderRuntimeDiagnostic {
+  code: string;
+  message: string;
+  severity: 'info' | 'warning' | 'error';
+  section?: string;
+}
+
+export interface WorkorderRuntimeRejectedWidget {
+  widgetId?: string;
+  widgetType?: string;
+  reason: string;
+}
+
+export interface WorkorderAgentRuntimeEnvelope {
+  payload_version?: string;
+  payload_type?: 'workorder_agent_response' | 'workorder_insight';
+  intent?: 'workorder_insight' | string;
+  generated_at?: string;
+  summary?: unknown;
+  widgets?: unknown[];
+  readonly_actions?: unknown[];
+  diagnostics?: unknown[];
+  trace?: WorkorderRuntimeTraceMetadata;
+  trace_metadata?: WorkorderRuntimeTraceMetadata;
 }
 
 export interface NormalizedWorkorderAgentPayload {
@@ -46,6 +81,10 @@ export interface NormalizedWorkorderAgentPayload {
     message: string;
     code?: string;
   };
+  runtimeDiagnostics: WorkorderRuntimeDiagnostic[];
+  rejectedWidgets: WorkorderRuntimeRejectedWidget[];
+  runtimeWidgets: UiWidget[];
+  traceMetadata?: WorkorderRuntimeTraceMetadata;
   traceRefs: UiTraceRef[];
   evidenceRefs: UiEvidenceRef[];
 }
@@ -87,7 +126,12 @@ export function isWorkorderAgentPayloadLike(payload: unknown): payload is Workor
   const candidate = getRecord(record.workspace_payload) ?? record;
   return Boolean(
     candidate.payload_type === 'workorder_insight'
+    || candidate.payload_type === 'workorder_agent_response'
     || candidate.intent === 'workorder_insight'
+    || candidate.widgets
+    || candidate.readonly_actions
+    || candidate.diagnostics
+    || candidate.trace_metadata
     || candidate.summary
     || candidate.kpi_cards
     || candidate.recommendations
@@ -106,7 +150,7 @@ export function isWorkorderAgentPayloadLike(payload: unknown): payload is Workor
 
 export function normalizeWorkorderAgentPayload(payload: unknown): NormalizedWorkorderAgentPayload {
   const root = getRecord(payload);
-  const record = getRecord(root?.workspace_payload) ?? root;
+  const record = getRuntimePayloadRecord(root) ?? getRecord(root?.workspace_payload) ?? root;
 
   if (!record) {
     return emptyNormalizedPayload();
@@ -114,6 +158,8 @@ export function normalizeWorkorderAgentPayload(payload: unknown): NormalizedWork
 
   const error = normalizeError(record.error ?? root?.error ?? record);
   const summary = normalizeSummary(record.summary);
+  const runtimeWidgetResult = normalizeRuntimeWidgets(record.widgets);
+  const traceMetadata = normalizeTraceMetadata(root, record);
   const evidenceRefs = [
     ...normalizeEvidenceRefs(record.evidence),
     ...normalizeEvidenceRefs(record.sources),
@@ -137,13 +183,26 @@ export function normalizeWorkorderAgentPayload(payload: unknown): NormalizedWork
     ],
     evidence: normalizeArray(record.evidence, normalizeEvidence),
     actions: validateAgentReadonlyActions([
+      ...normalizeRecordArray(record.readonly_actions),
       ...normalizeRecordArray(record.actions),
       ...normalizeRecordArray(record.ui_actions),
     ]),
     filters: getRecord(record.filters) ? { ...getRecord(record.filters) } : undefined,
     workorderRows: normalizeWorkorderRows(record.workorders ?? record.workorder_rows ?? record.rows),
     error,
-    traceRefs: normalizeTraceRefs(root ?? record),
+    runtimeDiagnostics: [
+      ...normalizeRuntimeDiagnostics(record.diagnostics),
+      ...runtimeWidgetResult.rejectedWidgets.map((widget): WorkorderRuntimeDiagnostic => ({
+        code: 'runtime_widget_rejected',
+        message: widget.reason,
+        severity: 'warning',
+        section: widget.widgetId ?? widget.widgetType ?? 'widgets',
+      })),
+    ],
+    rejectedWidgets: runtimeWidgetResult.rejectedWidgets,
+    runtimeWidgets: runtimeWidgetResult.widgets,
+    traceMetadata,
+    traceRefs: normalizeTraceRefs(root ?? record, traceMetadata),
     evidenceRefs,
   };
 }
@@ -280,6 +339,8 @@ export function adaptWorkorderAgentPayloadToWidgets(
     });
   });
 
+  widgets.push(...getRuntimeWidgets(normalized));
+
   if (widgets.length === 0) {
     widgets.push({
       id: widgetId('empty'),
@@ -303,9 +364,128 @@ function emptyNormalizedPayload(): NormalizedWorkorderAgentPayload {
     evidence: [],
     actions: [],
     workorderRows: [],
+    runtimeDiagnostics: [],
+    rejectedWidgets: [],
+    runtimeWidgets: [],
     traceRefs: [],
     evidenceRefs: [],
   };
+}
+
+function getRuntimePayloadRecord(root: WorkorderAgentPayloadRecord | null | undefined): WorkorderAgentPayloadRecord | null {
+  if (!root) {
+    return null;
+  }
+
+  const nested = getRecord(root.runtime_payload) ?? getRecord(root.agent_response);
+  if (nested) {
+    return nested;
+  }
+
+  if (
+    root.payload_type === 'workorder_agent_response'
+    || root.widgets
+    || root.readonly_actions
+    || root.trace_metadata
+  ) {
+    return root;
+  }
+
+  return null;
+}
+
+function normalizeRuntimeWidgets(value: unknown): {
+  widgets: UiWidget[];
+  rejectedWidgets: WorkorderRuntimeRejectedWidget[];
+} {
+  const widgets: UiWidget[] = [];
+  const rejectedWidgets: WorkorderRuntimeRejectedWidget[] = [];
+
+  normalizeRecordArray(value).forEach((record, index) => {
+    const widgetIdValue = getText(record.id) ?? `widgets[${index}]`;
+    const widgetType = getText(record.type);
+
+    if (!widgetType || !isSupportedWidgetType(widgetType)) {
+      rejectedWidgets.push({
+        widgetId: widgetIdValue,
+        widgetType,
+        reason: `Runtime widget '${widgetIdValue}' uses unsupported type '${widgetType ?? 'unknown'}'`,
+      });
+      return;
+    }
+
+    if (widgetType === 'action_list_readonly') {
+      rejectedWidgets.push({
+        widgetId: widgetIdValue,
+        widgetType,
+        reason: `Runtime widget '${widgetIdValue}' must provide actions through readonly_actions`,
+      });
+      return;
+    }
+
+    const candidate = record as Partial<UiWidget> as UiWidget;
+    const validation = validateWidget(candidate, maintenanceWorkordersSurface);
+    if (!validation.valid) {
+      rejectedWidgets.push({
+        widgetId: widgetIdValue,
+        widgetType,
+        reason: validation.errors.map((item) => item.message).join('; ') || 'Runtime widget failed validation',
+      });
+      return;
+    }
+
+    if (!isWidgetAllowedForMaintenanceWorkorders(candidate)) {
+      rejectedWidgets.push({
+        widgetId: widgetIdValue,
+        widgetType,
+        reason: `Runtime widget '${widgetIdValue}' is not allowed on the maintenance workorders surface`,
+      });
+      return;
+    }
+
+    widgets.push(candidate);
+  });
+
+  return { widgets, rejectedWidgets };
+}
+
+function getRuntimeWidgets(normalized: NormalizedWorkorderAgentPayload): UiWidget[] {
+  if (normalized.runtimeWidgets.length === 0) {
+    return [];
+  }
+
+  return normalized.runtimeWidgets.map((widget) => ({
+    ...widget,
+    traceRefs: widget.traceRefs?.length ? widget.traceRefs : normalized.traceRefs,
+    evidenceRefs: widget.evidenceRefs?.length ? widget.evidenceRefs : normalized.evidenceRefs,
+  } as UiWidget));
+}
+
+function normalizeRuntimeDiagnostics(value: unknown): WorkorderRuntimeDiagnostic[] {
+  return normalizeRecordArray(value).map((record, index): WorkorderRuntimeDiagnostic => ({
+    code: getText(record.code) ?? `runtime_diagnostic_${index + 1}`,
+    message: getText(record.message ?? record.description) ?? 'Runtime diagnostic was provided without a message',
+    severity: normalizeEnum(record.severity, ['info', 'warning', 'error']) ?? 'info',
+    section: getText(record.section),
+  }));
+}
+
+function normalizeTraceMetadata(
+  root: WorkorderAgentPayloadRecord | null | undefined,
+  record: WorkorderAgentPayloadRecord,
+): WorkorderRuntimeTraceMetadata | undefined {
+  const traceRecord = getRecord(record.trace_metadata)
+    ?? getRecord(record.trace)
+    ?? getRecord(root?.trace_metadata)
+    ?? getRecord(root?.trace);
+
+  const trace_id = getText(record.trace_id ?? root?.trace_id ?? traceRecord?.trace_id);
+  const agent_id = getText(record.agent_id ?? record.generated_by_agent_id ?? root?.agent_id ?? traceRecord?.agent_id);
+  const run_id = getText(record.run_id ?? root?.run_id ?? traceRecord?.run_id);
+  const payload_version = getText(record.payload_version ?? root?.payload_version ?? traceRecord?.payload_version);
+  const metadata = compactRecord({ trace_id, agent_id, run_id, payload_version }) as WorkorderRuntimeTraceMetadata | undefined;
+
+  return metadata;
 }
 
 function normalizeSummary(value: unknown): WorkspacePayloadSummary | undefined {
@@ -544,19 +724,28 @@ function errorWidget(
   };
 }
 
-function normalizeTraceRefs(record: WorkorderAgentPayloadRecord): UiTraceRef[] {
-  const traceId = getText(record.trace_id ?? getRecord(record.trace)?.trace_id);
+function normalizeTraceRefs(
+  record: WorkorderAgentPayloadRecord,
+  traceMetadata?: WorkorderRuntimeTraceMetadata,
+): UiTraceRef[] {
+  const traceId = traceMetadata?.trace_id ?? getText(record.trace_id ?? getRecord(record.trace)?.trace_id);
   const actionId = getText(record.action_id);
-  const generatedByAgentId = getText(record.generated_by_agent_id);
+  const generatedByAgentId = traceMetadata?.agent_id ?? getText(record.generated_by_agent_id);
   const sourceToolIds = normalizeTextArray(record.source_tool_ids);
   const refs: UiTraceRef[] = [];
 
-  if (traceId) {
+  if (traceId || generatedByAgentId || traceMetadata?.run_id || traceMetadata?.payload_version) {
     refs.push({
-      id: safeId(traceId, 'trace'),
+      id: safeId(traceId ?? traceMetadata?.run_id ?? generatedByAgentId ?? 'runtime-trace', 'trace'),
       label: 'Agent trace',
       source: 'agent',
-      metadata: compactRecord({ traceId, actionId, generatedByAgentId }),
+      metadata: compactRecord({
+        traceId,
+        actionId,
+        generatedByAgentId,
+        runId: traceMetadata?.run_id,
+        payloadVersion: traceMetadata?.payload_version,
+      }),
     });
   }
 

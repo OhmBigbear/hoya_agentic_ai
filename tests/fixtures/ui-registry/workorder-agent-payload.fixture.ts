@@ -258,6 +258,94 @@ export const malformedWorkorderAgentPayload = {
   },
 };
 
+export const runtimeWorkorderAgentResponse = {
+  payload_version: '2.0',
+  payload_type: 'workorder_agent_response',
+  intent: 'workorder_insight',
+  generated_at: '2026-06-05T09:20:00+07:00',
+  trace_metadata: {
+    trace_id: 'trace-runtime-workorder-021',
+    agent_id: 'maint-workorder-agent',
+    run_id: 'run-runtime-021-b07',
+    payload_version: '2.0',
+  },
+  summary: {
+    title: 'Runtime workorder risk summary',
+    headline: 'Agentic Core found repeated open corrective work on POLISHING-7A with spare part risk.',
+    confidence: 'high',
+    severity: 'warning',
+    time_range: { label: 'Last 14 days', from: '2026-05-22', to: '2026-06-05', timezone: 'Asia/Bangkok' },
+    limitations: ['Runtime integration is passive and read-only in this UI harness.'],
+  },
+  widgets: [
+    {
+      id: 'runtime-open-workorders',
+      type: 'kpi_card',
+      regionId: 'maintenance.workorders.kpi.summary',
+      title: 'Open runtime workorders',
+      value: 7,
+      unit: 'orders',
+      trend: 'up',
+    },
+    {
+      id: 'runtime-workorder-table',
+      type: 'data_table',
+      regionId: 'maintenance.workorders.table',
+      title: 'Runtime workorders',
+      columns: [
+        { id: 'workorder_no', label: 'Workorder', field: 'workorder_no' },
+        { id: 'equipment_no', label: 'Machine', field: 'equipment_no' },
+        { id: 'priority', label: 'Priority', field: 'priority' },
+      ],
+      rows: [
+        { workorder_no: 'WO-RUNTIME-100', equipment_no: 'POLISHING-7A', priority: 'High' },
+        { workorder_no: 'WO-RUNTIME-101', equipment_no: 'POLISHING-7A', priority: 'Critical' },
+      ],
+    },
+  ],
+  readonly_actions: [
+    { id: 'view_workorder', mode: 'readonly', label: 'View WO-RUNTIME-100', target: 'WO-RUNTIME-100' },
+    { id: 'view_machine', mode: 'readonly', label: 'View POLISHING-7A', target: 'POLISHING-7A' },
+  ],
+  diagnostics: [
+    {
+      code: 'runtime_payload_normalized',
+      severity: 'info',
+      section: 'widgets',
+      message: 'Runtime widgets were normalized through the maintenance workorder registry.',
+    },
+  ],
+};
+
+export const unsafeRuntimeWorkorderAgentResponse = {
+  ...runtimeWorkorderAgentResponse,
+  readonly_actions: [
+    { id: 'view_workorder', mode: 'readonly', label: 'View WO-RUNTIME-100', target: 'WO-RUNTIME-100' },
+    { id: 'delete_workorder', mode: 'readonly', label: 'Delete WO-RUNTIME-100', target: 'WO-RUNTIME-100' },
+    { id: 'view_machine', mode: 'execute', label: 'Execute machine action', target: 'POLISHING-7A' },
+  ],
+};
+
+export const unknownWidgetRuntimeWorkorderAgentResponse = {
+  ...runtimeWorkorderAgentResponse,
+  widgets: [
+    ...runtimeWorkorderAgentResponse.widgets,
+    {
+      id: 'runtime-unsafe-widget',
+      type: 'mutation_form',
+      regionId: 'maintenance.workorders.actions.readonly',
+      title: 'Unsafe mutation form',
+    },
+    {
+      id: 'runtime-bad-region',
+      type: 'kpi_card',
+      regionId: 'maintenance.workorders.production.writeback',
+      title: 'Bad region',
+      value: 1,
+    },
+  ],
+};
+
 export const htmlInjectionWorkorderAgentPayload = {
   workspace_payload: {
     payload_version: '1.0',
