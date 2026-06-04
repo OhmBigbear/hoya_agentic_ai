@@ -65,3 +65,13 @@ export {
   maintenanceWorkordersSurface,
   maintenanceWorkordersSurfaceId,
 } from './surfaces/maintenanceWorkordersSurface';
+
+export {
+  adaptWorkorderAgentPayloadToWidgets,
+  isWorkorderAgentPayloadLike,
+  normalizeWorkorderAgentPayload,
+} from './adapters/workorderAgentPayloadAdapter';
+export type {
+  NormalizedWorkorderAgentPayload,
+  WorkorderAgentPayloadAdapterOptions,
+} from './adapters/workorderAgentPayloadAdapter';

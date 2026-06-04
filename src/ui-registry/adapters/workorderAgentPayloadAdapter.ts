@@ -1,0 +1,741 @@
+import type {
+  WorkspacePayloadAction,
+  WorkspacePayloadChart,
+  WorkspacePayloadEvidence,
+  WorkspacePayloadKpiCard,
+  WorkspacePayloadRecommendation,
+  WorkspacePayloadSummary,
+} from '../../types/operationsWorkspace';
+import type {
+  UiActionTargetId,
+  UiEvidenceRef,
+  UiReadonlyActionListWidget,
+  UiTraceRef,
+  UiTrendChartWidget,
+  UiWidget,
+} from '../types';
+import {
+  maintenanceWorkordersActionTargetIds,
+  maintenanceWorkordersRegionIds,
+  maintenanceWorkordersSurfaceId,
+} from '../surfaces/maintenanceWorkordersSurface';
+
+type WorkorderAgentPayloadRecord = Record<string, unknown>;
+
+export interface WorkorderAgentPayloadAdapterOptions {
+  emptyMessage?: string;
+}
+
+export interface NormalizedWorkorderAgentPayload {
+  payloadVersion?: string;
+  payloadType?: string;
+  intent?: string;
+  generatedAt?: string;
+  summary?: WorkspacePayloadSummary;
+  kpiCards: WorkspacePayloadKpiCard[];
+  charts: WorkspacePayloadChart[];
+  recommendations: WorkspacePayloadRecommendation[];
+  evidence: WorkspacePayloadEvidence[];
+  actions: WorkspacePayloadAction[];
+  filters?: Record<string, unknown>;
+  workorderRows: WorkorderTableRow[];
+  error?: {
+    message: string;
+    code?: string;
+  };
+  traceRefs: UiTraceRef[];
+  evidenceRefs: UiEvidenceRef[];
+}
+
+type WorkorderTableRow = Record<string, string | number | boolean | null>;
+
+const regionIds = new Set<string>(maintenanceWorkordersRegionIds);
+const actionTargetIds = new Set<UiActionTargetId>(maintenanceWorkordersActionTargetIds);
+
+const kpiSummaryRegion = 'maintenance.workorders.kpi.summary';
+const tableRegion = 'maintenance.workorders.table';
+const chartRegion = 'maintenance.workorders.charts';
+const insightsRegion = 'maintenance.workorders.insights';
+const evidenceRegion = 'maintenance.workorders.evidence';
+const actionsRegion = 'maintenance.workorders.actions.readonly';
+
+const workorderTableFields = [
+  'workorder_no',
+  'workorder_id',
+  'id',
+  'equipment_no',
+  'machine_id',
+  'machine',
+  'status',
+  'priority',
+  'work_type',
+  'assignee',
+  'technician',
+  'due_date',
+  'created_at',
+  'updated_at',
+] as const;
+
+export function isWorkorderAgentPayloadLike(payload: unknown): payload is WorkorderAgentPayloadRecord {
+  const record = getRecord(payload);
+  if (!record) {
+    return false;
+  }
+
+  const candidate = getRecord(record.workspace_payload) ?? record;
+  return Boolean(
+    candidate.payload_type === 'workorder_insight'
+    || candidate.intent === 'workorder_insight'
+    || candidate.summary
+    || candidate.kpi_cards
+    || candidate.recommendations
+    || candidate.insights
+    || candidate.evidence
+    || candidate.sources
+    || candidate.ui_actions
+    || candidate.actions
+    || candidate.workorders
+    || candidate.workorder_rows
+    || candidate.charts
+    || candidate.series
+    || candidate.error,
+  );
+}
+
+export function normalizeWorkorderAgentPayload(payload: unknown): NormalizedWorkorderAgentPayload {
+  const root = getRecord(payload);
+  const record = getRecord(root?.workspace_payload) ?? root;
+
+  if (!record) {
+    return emptyNormalizedPayload();
+  }
+
+  const error = normalizeError(record.error ?? root?.error ?? record);
+  const summary = normalizeSummary(record.summary);
+  const evidenceRefs = [
+    ...normalizeEvidenceRefs(record.evidence),
+    ...normalizeEvidenceRefs(record.sources),
+    ...normalizeEvidenceRefs(record.citations),
+  ];
+
+  return {
+    payloadVersion: getText(record.payload_version),
+    payloadType: getText(record.payload_type),
+    intent: getText(record.intent),
+    generatedAt: getText(record.generated_at),
+    summary,
+    kpiCards: normalizeArray(record.kpi_cards, normalizeKpiCard),
+    charts: [
+      ...normalizeArray(record.charts, normalizeChart),
+      ...normalizeSeriesCharts(record.series),
+    ],
+    recommendations: [
+      ...normalizeArray(record.recommendations, normalizeRecommendation),
+      ...normalizeArray(record.insights, normalizeRecommendation),
+    ],
+    evidence: normalizeArray(record.evidence, normalizeEvidence),
+    actions: [
+      ...normalizeArray(record.actions, normalizeAction),
+      ...normalizeArray(record.ui_actions, normalizeAction),
+    ],
+    filters: getRecord(record.filters) ? { ...getRecord(record.filters) } : undefined,
+    workorderRows: normalizeWorkorderRows(record.workorders ?? record.workorder_rows ?? record.rows),
+    error,
+    traceRefs: normalizeTraceRefs(root ?? record),
+    evidenceRefs,
+  };
+}
+
+export function adaptWorkorderAgentPayloadToWidgets(
+  payload: unknown,
+  options: WorkorderAgentPayloadAdapterOptions = {},
+): UiWidget[] {
+  const normalized = normalizeWorkorderAgentPayload(payload);
+  const traceRefs = normalized.traceRefs;
+  const evidenceRefs = normalized.evidenceRefs;
+
+  if (normalized.error) {
+    return [errorWidget(normalized.error.message, normalized.error.code, traceRefs, evidenceRefs)];
+  }
+
+  const widgets: UiWidget[] = [];
+
+  if (normalized.summary) {
+    widgets.push({
+      id: widgetId('summary'),
+      type: 'summary_card',
+      regionId: kpiSummaryRegion,
+      title: normalized.summary.title,
+      summary: normalized.summary.headline,
+      items: [
+        { label: 'Confidence', value: normalized.summary.confidence },
+        { label: 'Severity', value: normalized.summary.severity },
+        ...(normalized.summary.time_range?.label
+          ? [{ label: 'Time range', value: normalized.summary.time_range.label }]
+          : []),
+      ],
+      traceRefs,
+      evidenceRefs,
+      metadata: {
+        generatedAt: normalized.generatedAt,
+        limitations: normalized.summary.limitations,
+      },
+    });
+  }
+
+  normalized.kpiCards.forEach((card, index) => {
+    widgets.push({
+      id: widgetId(`kpi-${card.id || index}`),
+      type: 'kpi_card',
+      regionId: kpiSummaryRegion,
+      title: card.label,
+      description: card.description,
+      value: card.value,
+      unit: card.unit,
+      trend: card.trend === 'unknown' ? undefined : card.trend,
+      traceRefs,
+      evidenceRefs,
+      metadata: { severity: card.severity },
+    });
+  });
+
+  if (normalized.recommendations.length > 0) {
+    widgets.push({
+      id: widgetId('insights'),
+      type: 'insight_list',
+      regionId: insightsRegion,
+      title: 'Workorder insights',
+      insights: normalized.recommendations.map((item) => ({
+        id: safeId(item.id, 'insight'),
+        title: item.title,
+        summary: item.rationale,
+        severity: item.priority,
+        evidenceRefs: evidenceRefs.filter((evidence) => item.related_refs.includes(evidence.id)),
+        metadata: {
+          suggestedAction: item.suggested_action,
+          requiresHumanDecision: item.requires_human_decision,
+          relatedRefs: item.related_refs,
+        },
+      })),
+      traceRefs,
+      evidenceRefs,
+    });
+  }
+
+  if (evidenceRefs.length > 0) {
+    widgets.push({
+      id: widgetId('evidence'),
+      type: 'evidence_list',
+      regionId: evidenceRegion,
+      title: 'Evidence',
+      evidenceRefs,
+      traceRefs,
+    });
+  }
+
+  const readonlyActions = normalizeReadonlyActions(normalized.actions, normalized.filters);
+  if (readonlyActions.length > 0) {
+    widgets.push({
+      id: widgetId('readonly-actions'),
+      type: 'action_list_readonly',
+      regionId: actionsRegion,
+      title: 'Read-only actions',
+      actions: readonlyActions,
+      traceRefs,
+      evidenceRefs,
+    });
+  }
+
+  if (normalized.workorderRows.length > 0) {
+    widgets.push({
+      id: widgetId('workorders-table'),
+      type: 'data_table',
+      regionId: tableRegion,
+      title: 'Workorders',
+      columns: inferWorkorderColumns(normalized.workorderRows),
+      rows: normalized.workorderRows,
+      traceRefs,
+      evidenceRefs,
+    });
+  }
+
+  normalized.charts.forEach((chart, index) => {
+    const series = normalizeChartSeries(chart);
+    if (series.length === 0) {
+      return;
+    }
+
+    widgets.push({
+      id: widgetId(`chart-${chart.id || index}`),
+      type: 'trend_chart',
+      regionId: chartRegion,
+      title: chart.title,
+      description: chart.description,
+      series,
+      traceRefs,
+      evidenceRefs,
+      metadata: { chartType: chart.type },
+    });
+  });
+
+  if (widgets.length === 0) {
+    widgets.push({
+      id: widgetId('empty'),
+      type: 'empty_state',
+      regionId: kpiSummaryRegion,
+      title: 'No workorder preview',
+      message: options.emptyMessage ?? 'No maintenance workorder preview data is available.',
+      traceRefs,
+      evidenceRefs,
+    });
+  }
+
+  return widgets.filter(isWidgetAllowedForMaintenanceWorkorders);
+}
+
+function emptyNormalizedPayload(): NormalizedWorkorderAgentPayload {
+  return {
+    kpiCards: [],
+    charts: [],
+    recommendations: [],
+    evidence: [],
+    actions: [],
+    workorderRows: [],
+    traceRefs: [],
+    evidenceRefs: [],
+  };
+}
+
+function normalizeSummary(value: unknown): WorkspacePayloadSummary | undefined {
+  const record = getRecord(value);
+  const title = getText(record?.title);
+  const headline = getText(record?.headline ?? record?.summary ?? record?.description);
+  const confidence = normalizeEnum(record?.confidence, ['low', 'medium', 'high']);
+  const severity = normalizeEnum(record?.severity, ['normal', 'warning', 'critical', 'unknown']);
+
+  if (!title || !headline) {
+    return undefined;
+  }
+
+  return {
+    title,
+    headline,
+    confidence: confidence ?? 'medium',
+    severity: severity ?? 'unknown',
+    time_range: normalizeTimeRange(record?.time_range),
+    limitations: normalizeTextArray(record?.limitations),
+  };
+}
+
+function normalizeKpiCard(value: unknown): WorkspacePayloadKpiCard | null {
+  const record = getRecord(value);
+  const id = getText(record?.id);
+  const label = getText(record?.label ?? record?.title);
+  const cardValue = getScalar(record?.value);
+
+  if (!id || !label || cardValue === undefined) {
+    return null;
+  }
+
+  return {
+    id,
+    label,
+    value: cardValue,
+    unit: getText(record?.unit),
+    trend: normalizeEnum(record?.trend, ['up', 'down', 'flat', 'unknown']) ?? 'unknown',
+    severity: normalizeEnum(record?.severity, ['normal', 'warning', 'critical', 'unknown']) ?? 'unknown',
+    description: getText(record?.description),
+  };
+}
+
+function normalizeChart(value: unknown): WorkspacePayloadChart | null {
+  const record = getRecord(value);
+  const id = getText(record?.id);
+  const title = getText(record?.title ?? record?.label);
+  const data = normalizeRecordArray(record?.data ?? record?.points);
+
+  if (!id || !title || data.length === 0) {
+    return null;
+  }
+
+  return {
+    id,
+    type: normalizeEnum(record?.type, ['bar', 'line', 'donut', 'table']) ?? 'line',
+    title,
+    description: getText(record?.description),
+    x_key: getText(record?.x_key ?? record?.xField ?? record?.x),
+    y_key: getText(record?.y_key ?? record?.yField ?? record?.y),
+    data,
+  };
+}
+
+function normalizeSeriesCharts(value: unknown): WorkspacePayloadChart[] {
+  return normalizeRecordArray(value).map((series, index) => ({
+    id: getText(series.id) ?? `series-${index + 1}`,
+    type: 'line',
+    title: getText(series.title ?? series.label) ?? `Series ${index + 1}`,
+    x_key: getText(series.x_key) ?? 'x',
+    y_key: getText(series.y_key) ?? 'y',
+    data: normalizeRecordArray(series.points ?? series.data),
+  })).filter((chart) => chart.data.length > 0);
+}
+
+function normalizeRecommendation(value: unknown): WorkspacePayloadRecommendation | null {
+  const record = getRecord(value);
+  const id = getText(record?.id);
+  const title = getText(record?.title);
+  const rationale = getText(record?.rationale ?? record?.summary ?? record?.description);
+
+  if (!id || !title || !rationale) {
+    return null;
+  }
+
+  return {
+    id,
+    title,
+    rationale,
+    priority: normalizeEnum(record?.priority ?? record?.severity, ['low', 'medium', 'high']) ?? 'medium',
+    suggested_action: getText(record?.suggested_action ?? record?.suggestedAction) ?? '',
+    requires_human_decision: true,
+    related_refs: normalizeTextArray(record?.related_refs ?? record?.evidence_refs),
+  };
+}
+
+function normalizeEvidence(value: unknown): WorkspacePayloadEvidence | null {
+  const record = getRecord(value);
+  const sourceType = normalizeEnum(record?.source_type ?? record?.sourceType, ['tool', 'api', 'dataset', 'agent', 'system']);
+  const sourceName = getText(record?.source_name ?? record?.source ?? record?.label);
+
+  if (!sourceType || !sourceName) {
+    return null;
+  }
+
+  return {
+    source_type: sourceType,
+    source_name: sourceName,
+    reference: getText(record?.reference ?? record?.id ?? record?.href),
+    timestamp: getText(record?.timestamp),
+    description: getText(record?.description ?? record?.summary),
+  };
+}
+
+function normalizeEvidenceRefs(value: unknown): UiEvidenceRef[] {
+  return normalizeRecordArray(value).map((record, index): UiEvidenceRef | null => {
+    const id = getText(record.id ?? record.reference ?? record.source_tool_id) ?? `evidence-${index + 1}`;
+    const label = getText(record.label ?? record.source_name ?? record.source ?? record.summary ?? record.description) ?? id;
+    return {
+      id: safeId(id, 'evidence'),
+      label,
+      source: getText(record.source_type ?? record.source),
+      href: getText(record.href ?? record.reference),
+      metadata: compactRecord({
+        timestamp: getText(record.timestamp),
+        description: getText(record.description ?? record.summary),
+        sourceToolId: getText(record.source_tool_id),
+      }),
+    };
+  }).filter((item): item is UiEvidenceRef => item !== null);
+}
+
+function normalizeAction(value: unknown): WorkspacePayloadAction | null {
+  const record = getRecord(value);
+  const id = getText(record?.id ?? record?.action_id);
+  const label = getText(record?.label ?? record?.type);
+  const actionType = normalizeWorkspaceActionType(record?.action_type ?? record?.type);
+
+  if (!id || !label || !actionType) {
+    return null;
+  }
+
+  return {
+    id,
+    label,
+    action_type: actionType,
+    target: getText(record?.target ?? record?.targetId ?? record?.entity_id),
+    enabled: record?.enabled !== false && record?.valid !== false,
+  };
+}
+
+function normalizeReadonlyActions(
+  actions: WorkspacePayloadAction[],
+  filters?: Record<string, unknown>,
+): NonNullable<UiReadonlyActionListWidget['actions']> {
+  return actions
+    .filter((action) => action.enabled)
+    .map((action) => {
+      const targetId = mapReadonlyActionTarget(action, filters);
+      if (!targetId || !actionTargetIds.has(targetId)) {
+        return null;
+      }
+      return {
+        id: safeId(action.id, 'action'),
+        label: action.label,
+        targetId,
+        metadata: compactRecord({
+          actionType: action.action_type,
+          target: action.target,
+        }),
+      };
+    })
+    .filter((action): action is NonNullable<UiReadonlyActionListWidget['actions']>[number] => action !== null);
+}
+
+function mapReadonlyActionTarget(
+  action: WorkspacePayloadAction,
+  filters?: Record<string, unknown>,
+): UiActionTargetId | null {
+  if (action.target && actionTargetIds.has(action.target)) {
+    return action.target;
+  }
+
+  if (action.target?.startsWith('maintenance.workorders.actions.')) {
+    return null;
+  }
+
+  if (action.action_type === 'open_detail') {
+    return 'maintenance.workorders.actions.preview_workorder';
+  }
+
+  if (action.action_type === 'open_trace') {
+    return 'maintenance.workorders.actions.open_copilot_context';
+  }
+
+  if (action.action_type === 'apply_filter') {
+    const target = String(action.target ?? '').toLowerCase();
+    const filterKeys = Object.keys(filters ?? {}).join(' ').toLowerCase();
+    if (target.includes('machine') || filterKeys.includes('machine') || filterKeys.includes('equipment')) {
+      return 'maintenance.workorders.actions.filter_by_machine';
+    }
+    if (target.includes('status') || filterKeys.includes('status')) {
+      return 'maintenance.workorders.actions.filter_by_status';
+    }
+    if (target.includes('priority') || filterKeys.includes('priority')) {
+      return 'maintenance.workorders.actions.filter_by_priority';
+    }
+  }
+
+  return null;
+}
+
+function normalizeWorkspaceActionType(value: unknown): WorkspacePayloadAction['action_type'] | null {
+  if (value === 'open_trace') {
+    return 'open_trace';
+  }
+  if (value === 'open_detail' || value === 'open_detail_panel') {
+    return 'open_detail';
+  }
+  if (value === 'apply_filter' || value === 'set_filter') {
+    return 'apply_filter';
+  }
+  return null;
+}
+
+function normalizeWorkorderRows(value: unknown): WorkorderTableRow[] {
+  return normalizeRecordArray(value).map((record) => {
+    const row: WorkorderTableRow = {};
+    workorderTableFields.forEach((field) => {
+      const scalar = getScalar(record[field]);
+      if (scalar !== undefined) {
+        row[field] = scalar;
+      }
+    });
+    return row;
+  }).filter((row) => Object.keys(row).length > 0);
+}
+
+function inferWorkorderColumns(rows: WorkorderTableRow[]): Array<{ id: string; label: string; field: string }> {
+  const fields = workorderTableFields.filter((field) => rows.some((row) => row[field] !== undefined));
+  return fields.map((field) => ({
+    id: field,
+    label: labelFromField(field),
+    field,
+  }));
+}
+
+function normalizeChartSeries(chart: WorkspacePayloadChart): UiTrendChartWidget['series'] {
+  const xKey = chart.x_key ?? inferChartKey(chart.data, ['x', 'date', 'day', 'period', 'label', 'timestamp']);
+  const yKey = chart.y_key ?? inferChartKey(chart.data, ['y', 'value', 'count', 'total', 'hours']);
+
+  if (!xKey || !yKey) {
+    return [];
+  }
+
+  return [{
+    id: safeId(chart.id, 'series'),
+    label: chart.title,
+    points: chart.data.map((point, index) => ({
+      x: getScalar(point[xKey]) ?? index + 1,
+      y: getNumber(point[yKey]),
+    })),
+  }];
+}
+
+function inferChartKey(rows: Record<string, unknown>[], preferred: string[]): string | undefined {
+  const keys = rows.flatMap((row) => Object.keys(row));
+  return preferred.find((key) => keys.includes(key)) ?? keys[0];
+}
+
+function normalizeError(value: unknown): NormalizedWorkorderAgentPayload['error'] {
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return { message: value.trim() };
+  }
+
+  const record = getRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  const message = getText(record.message ?? record.error_message);
+  const code = getText(record.code ?? record.errorCode ?? record.error_code);
+  if (message && (record.error || record.status === 'error' || record.ok === false || code)) {
+    return { message, code };
+  }
+
+  return undefined;
+}
+
+function errorWidget(
+  message: string,
+  code: string | undefined,
+  traceRefs: UiTraceRef[],
+  evidenceRefs: UiEvidenceRef[],
+): UiWidget {
+  return {
+    id: widgetId('error'),
+    type: 'error_state',
+    regionId: kpiSummaryRegion,
+    title: 'Unable to adapt workorder preview',
+    message,
+    errorCode: code,
+    traceRefs,
+    evidenceRefs,
+  };
+}
+
+function normalizeTraceRefs(record: WorkorderAgentPayloadRecord): UiTraceRef[] {
+  const traceId = getText(record.trace_id ?? getRecord(record.trace)?.trace_id);
+  const actionId = getText(record.action_id);
+  const generatedByAgentId = getText(record.generated_by_agent_id);
+  const sourceToolIds = normalizeTextArray(record.source_tool_ids);
+  const refs: UiTraceRef[] = [];
+
+  if (traceId) {
+    refs.push({
+      id: safeId(traceId, 'trace'),
+      label: 'Agent trace',
+      source: 'agent',
+      metadata: compactRecord({ traceId, actionId, generatedByAgentId }),
+    });
+  }
+
+  sourceToolIds.forEach((sourceToolId) => {
+    refs.push({
+      id: safeId(sourceToolId, 'tool'),
+      label: sourceToolId,
+      source: 'tool',
+    });
+  });
+
+  return refs;
+}
+
+function isWidgetAllowedForMaintenanceWorkorders(widget: UiWidget): boolean {
+  return regionIds.has(widget.regionId) && isWidgetTypeAllowedInRegion(widget.type, widget.regionId);
+}
+
+function isWidgetTypeAllowedInRegion(type: UiWidget['type'], regionId: string): boolean {
+  switch (regionId) {
+    case kpiSummaryRegion:
+      return type === 'kpi_card' || type === 'summary_card' || type === 'empty_state' || type === 'error_state';
+    case tableRegion:
+      return type === 'data_table' || type === 'empty_state' || type === 'error_state';
+    case chartRegion:
+      return type === 'trend_chart' || type === 'summary_card' || type === 'empty_state' || type === 'error_state';
+    case insightsRegion:
+      return type === 'insight_list' || type === 'empty_state' || type === 'error_state';
+    case evidenceRegion:
+      return type === 'evidence_list' || type === 'empty_state' || type === 'error_state';
+    case actionsRegion:
+      return type === 'action_list_readonly' || type === 'empty_state' || type === 'error_state';
+    default:
+      return false;
+  }
+}
+
+function normalizeTimeRange(value: unknown): WorkspacePayloadSummary['time_range'] {
+  const record = getRecord(value);
+  if (!record) {
+    return null;
+  }
+  return {
+    from: getText(record.from),
+    to: getText(record.to),
+    timezone: getText(record.timezone),
+    label: getText(record.label),
+  };
+}
+
+function normalizeArray<T>(value: unknown, normalize: (item: unknown) => T | null): T[] {
+  return Array.isArray(value) ? value.map(normalize).filter((item): item is T => item !== null) : [];
+}
+
+function normalizeRecordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.map(getRecord).filter((item): item is Record<string, unknown> => item !== null) : [];
+}
+
+function getRecord(value: unknown): WorkorderAgentPayloadRecord | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as WorkorderAgentPayloadRecord
+    : null;
+}
+
+function getText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function getScalar(value: unknown): string | number | boolean | null | undefined {
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+  if (typeof value === 'number' || typeof value === 'boolean' || value === null) {
+    return value;
+  }
+  return undefined;
+}
+
+function getNumber(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function normalizeTextArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(getText).filter((item): item is string => Boolean(item)) : [];
+}
+
+function normalizeEnum<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
+  return typeof value === 'string' && allowed.includes(value as T) ? value as T : undefined;
+}
+
+function compactRecord(record: Record<string, unknown>): Record<string, unknown> | undefined {
+  const compacted = Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
+  return Object.keys(compacted).length > 0 ? compacted : undefined;
+}
+
+function safeId(value: string, fallbackPrefix: string): string {
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9._:-]+/g, '-').replace(/^-+|-+$/g, '');
+  return normalized || fallbackPrefix;
+}
+
+function widgetId(suffix: string): string {
+  return `${maintenanceWorkordersSurfaceId}.adapter.${safeId(suffix, 'widget')}`;
+}
+
+function labelFromField(field: string): string {
+  return field.split('_').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+}
