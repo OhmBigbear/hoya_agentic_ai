@@ -83,3 +83,10 @@ export type {
   WorkorderWidgetShadowDiagnostics,
   WorkorderWidgetShadowDiagnosticsOptions,
 } from './adapters/workorderShadowDiagnostics';
+
+export {
+  buildWorkorderWidgetPreviewModel,
+} from './adapters/workorderWidgetPreviewModel';
+export type {
+  WorkorderWidgetPreviewModel,
+} from './adapters/workorderWidgetPreviewModel';

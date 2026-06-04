@@ -49,7 +49,11 @@ import {
 } from '../../services/maintenanceWorkorderApi';
 import { requestOperationsWorkspacePreview } from '../../services/operationsWorkspaceCopilotApi';
 import {
+  buildWorkorderWidgetPreviewModel,
   buildWorkorderWidgetShadowDiagnostics,
+  maintenanceWorkordersSurface,
+  renderUiWidgetList,
+  type UiReadonlyActionEvent,
   type WorkorderWidgetShadowDiagnostics,
 } from '../../ui-registry';
 import type {
@@ -127,6 +131,7 @@ const defaultFilters: WorkorderFilters = {
 
 const pageSize = 12;
 const WORKORDER_WIDGET_SHADOW_MODE_ENABLED = false;
+const WORKORDER_WIDGET_DEV_PREVIEW_ENABLED = false;
 
 const emptySummary: MaintenanceDashboardSummary = {
   open_workorder_count: 0,
@@ -1255,6 +1260,9 @@ function AssistantStructuredBlocks({
   return (
     <div className="mt-3 space-y-3 border-t border-white/10 pt-3">
       {message.workspacePayload && <WorkspacePayloadInsight payload={message.workspacePayload} />}
+      {WORKORDER_WIDGET_SHADOW_MODE_ENABLED && WORKORDER_WIDGET_DEV_PREVIEW_ENABLED && message.workspacePayload && (
+        <DeveloperWidgetRegistryPreview payload={message.workspacePayload} />
+      )}
       {hasInsights && (
         <div className="space-y-2">
           <p className="text-[11px] uppercase text-slate-500">Insights</p>
@@ -1295,6 +1303,59 @@ function AssistantStructuredBlocks({
       )}
     </div>
   );
+}
+
+export function DeveloperWidgetRegistryPreview({ payload }: { payload?: WorkspacePayload }) {
+  const model = useMemo(() => (payload ? buildWorkorderWidgetPreviewModel(payload) : null), [payload]);
+
+  if (!model) {
+    return (
+      <div className="rounded border border-dashed border-cyan-400/30 bg-[#0f1623] p-2" data-testid="developer-widget-registry-preview">
+        <p className="text-[11px] uppercase text-cyan-300/80">Developer Widget Registry Preview</p>
+        <p className="mt-1 text-xs text-slate-400">No workspace payload available for widget preview.</p>
+      </div>
+    );
+  }
+
+  const diagnostics = model.diagnostics;
+
+  return (
+    <div className="rounded border border-cyan-400/30 bg-[#0f1623] p-2" data-testid="developer-widget-registry-preview">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="text-[11px] uppercase text-cyan-300/80">Developer Widget Registry Preview</p>
+          <p className="mt-1 text-xs text-slate-400">Read-only registry rendering from the assistant workspace payload.</p>
+        </div>
+        <Badge className={diagnostics.validationValid ? 'bg-emerald-500/15 text-emerald-200 border-emerald-400/30' : 'bg-amber-500/15 text-amber-200 border-amber-400/30'}>
+          {diagnostics.validationValid ? 'valid' : 'review'}
+        </Badge>
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-400">
+        <div>Widgets {diagnostics.adaptedWidgetCount}</div>
+        <div>Errors {diagnostics.errorCount}</div>
+        <div>Warnings {diagnostics.warningCount}</div>
+        <div>Type {diagnostics.lastPayloadType ?? 'unknown'}</div>
+        <div className="col-span-2">Intent {diagnostics.intent ?? 'unknown'}</div>
+      </div>
+      <div className="mt-3 rounded border border-white/10 bg-[#141b2e] p-2 text-xs text-slate-300">
+        {model.safeToRender ? renderUiWidgetList(model.widgets, {
+          surface: maintenanceWorkordersSurface,
+          fallbackMode: 'compact',
+          onReadonlyAction: handleDeveloperReadonlyAction,
+        }) : <p>No widget data available for preview.</p>}
+      </div>
+    </div>
+  );
+}
+
+export function handleDeveloperReadonlyAction(event: UiReadonlyActionEvent): void {
+  if (import.meta.env.DEV) {
+    console.debug('Developer widget registry preview action ignored', {
+      widgetId: event.widgetId,
+      actionId: event.actionId,
+      targetId: event.targetId,
+    });
+  }
 }
 
 function WorkspacePayloadInsight({ payload }: { payload: WorkspacePayload }) {
