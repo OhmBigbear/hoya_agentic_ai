@@ -8,7 +8,13 @@ import { getJson, usageText as apiSmokeUsageText } from './maintenance/smoke-mai
 import { requireDatabaseUrl as requireSmokeDatabaseUrl, usageText as dataSmokeUsageText } from './maintenance/smoke-maintenance-real-data.mjs';
 import { createCorsHandler, getAllowedCorsOrigins } from '../src/server/cors.mjs';
 import { assertDatabaseUrl, MissingDatabaseUrlError } from '../src/server/db/postgres.mjs';
-import { buildHoldReasonsQuery, buildMtbfMttrQuery } from '../src/server/maintenance/repositories/maintenanceAnalyticsRepository.mjs';
+import {
+  buildHoldReasonsQuery,
+  buildMachineHealthQuery,
+  buildMtbfMttrQuery,
+  buildReliabilityMtbfQuery,
+  buildReliabilityMttrQuery,
+} from '../src/server/maintenance/repositories/maintenanceAnalyticsRepository.mjs';
 import { buildStockRiskQuery } from '../src/server/maintenance/repositories/maintenanceInventoryRepository.mjs';
 import { buildWorkordersQuery } from '../src/server/maintenance/repositories/maintenanceWorkorderRepository.mjs';
 import { createMaintenanceRouter } from '../src/server/maintenance/routes/maintenanceRoutes.mjs';
@@ -50,6 +56,21 @@ function testQueryBuilders() {
   assert.match(mtbf.text, /maintenance\.v_mtbf_mttr_base/);
   assert.deepEqual(mtbf.values, ['MC-01', 10, 0]);
 
+  const reliabilityMtbf = buildReliabilityMtbfQuery({ section: 'MC1', machine_no: 'MC-01', period_month: '2026-06-01', limit: 3, offset: 2 });
+  assert.match(reliabilityMtbf.text, /maintenance\.v_mtbf_mttr_base base/);
+  assert.match(reliabilityMtbf.text, /LEFT JOIN maintenance\.equipment equipment/);
+  assert.doesNotMatch(reliabilityMtbf.text, /maintenance\.stg_/i);
+  assert.deepEqual(reliabilityMtbf.values, ['2026-06-01', 'MC-01', 'MC1', 'MC1%', 3, 2]);
+  assert.match(reliabilityMtbf.text, /ORDER BY period_month DESC NULLS LAST, mtbf_hours ASC NULLS LAST/);
+
+  const reliabilityMttr = buildReliabilityMttrQuery({ machine_type: 'GRINDER', limit: 4 });
+  assert.deepEqual(reliabilityMttr.values, ['GRINDER', 4, 0]);
+  assert.match(reliabilityMttr.text, /mttr_minutes DESC NULLS LAST/);
+
+  const machineHealth = buildMachineHealthQuery({ limit: 5 });
+  assert.deepEqual(machineHealth.values, [5, 0]);
+  assert.match(machineHealth.text, /health_score ASC NULLS LAST/);
+
   const holds = buildHoldReasonsQuery({ site: 'HOYA-BKK', department: 'ENG' });
   assert.match(holds.text, /maintenance\.v_hold_reason_summary/);
   assert.deepEqual(holds.values.slice(0, 2), ['HOYA-BKK', 'ENG']);
@@ -89,6 +110,18 @@ async function testRoutes() {
       async listMtbfMttr() {
         return { data: [{ equipment_no: 'MC-01', failure_count: 2, total_downtime_hours: 3 }], total: 1, limit: 50, offset: 0 };
       },
+      async listReliabilityMtbf(filters) {
+        calls.push(['listReliabilityMtbf', filters]);
+        return { data: [{ machine_no: 'MC-01', period_month: '2026-06-01', mtbf_hours: 12.5 }], total: 1, limit: 3, offset: 0 };
+      },
+      async listReliabilityMttr(filters) {
+        calls.push(['listReliabilityMttr', filters]);
+        return { data: [{ machine_no: 'MC-01', period_month: '2026-06-01', mttr_minutes: 44 }], total: 1, limit: 3, offset: 0 };
+      },
+      async listMachineHealth(filters) {
+        calls.push(['listMachineHealth', filters]);
+        return { data: [{ machine_no: 'MC-01', period_month: '2026-06-01', health_score: 71, health_band: 'healthy' }], total: 1, limit: 3, offset: 0 };
+      },
       async listHoldReasons() {
         return { data: [{ hold_reason_description: 'Waiting part', hold_count: 2 }], total: 1, limit: 50, offset: 0 };
       },
@@ -122,6 +155,27 @@ async function testRoutes() {
   const notFound = await invoke(router, '/api/maintenance/workorders/WO-404');
   assert.equal(notFound.statusCode, 404);
   assert.equal(notFound.body.error.code, 'WORKORDER_NOT_FOUND');
+
+  const mtbfEndpoint = await invoke(router, '/api/maintenance/analytics/mtbf?section=MC1&limit=3');
+  assert.equal(mtbfEndpoint.statusCode, 200);
+  assert.equal(mtbfEndpoint.body.total, 1);
+  assert.equal(mtbfEndpoint.body.limit, 3);
+  assert.equal(mtbfEndpoint.body.data[0].machine_no, 'MC-01');
+  assert.deepEqual(calls.at(-1), ['listReliabilityMtbf', { section: 'MC1', limit: '3' }]);
+
+  const mttrEndpoint = await invoke(router, '/api/maintenance/analytics/mttr?machine_type=GRINDER&limit=3');
+  assert.equal(mttrEndpoint.statusCode, 200);
+  assert.equal(mttrEndpoint.body.data[0].mttr_minutes, 44);
+  assert.deepEqual(calls.at(-1), ['listReliabilityMttr', { machine_type: 'GRINDER', limit: '3' }]);
+
+  const machineHealthEndpoint = await invoke(router, '/api/maintenance/analytics/machine-health?machine_no=MC-01&limit=3');
+  assert.equal(machineHealthEndpoint.statusCode, 200);
+  assert.equal(machineHealthEndpoint.body.data[0].health_band, 'healthy');
+  assert.deepEqual(calls.at(-1), ['listMachineHealth', { machine_no: 'MC-01', limit: '3' }]);
+
+  const sourceViewAlias = await invoke(router, '/api/maintenance/analytics/machine_health_score?limit=1');
+  assert.equal(sourceViewAlias.statusCode, 200);
+  assert.deepEqual(calls.at(-1), ['listMachineHealth', { limit: '1' }]);
 
   const failureRouter = createMaintenanceRouter({
     workorderService: {

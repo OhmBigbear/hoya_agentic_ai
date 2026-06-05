@@ -116,6 +116,27 @@ export function mtbfMttrDto(row) {
   };
 }
 
+export function maintenanceReliabilityDto(row) {
+  return {
+    period_month: dateOnlyString(row.period_month),
+    section: stringOrUndefined(row.section),
+    machine_type: stringOrUndefined(row.machine_type),
+    machine_no: stringOrUndefined(row.machine_no),
+    machine_desc: stringOrUndefined(row.machine_desc),
+    equipment_no: stringOrUndefined(row.equipment_no ?? row.machine_no),
+    equipment_desc: stringOrUndefined(row.equipment_desc ?? row.machine_desc),
+    failure_count: numberOrZero(row.failure_count),
+    mtbf_hours: numberOrUndefined(row.mtbf_hours),
+    mttr_hours: numberOrUndefined(row.mttr_hours),
+    mttr_minutes: numberOrUndefined(row.mttr_minutes),
+    total_downtime_hours: numberOrZero(row.total_downtime_hours),
+    health_score: numberOrUndefined(row.health_score),
+    health_band: stringOrUndefined(row.health_band),
+    last_failure_at: dateString(row.last_failure_at),
+    last_repair_end: dateString(row.last_repair_end),
+  };
+}
+
 export function riskMachineDto(row) {
   return {
     equipment_no: stringOrUndefined(row.equipment_no),
@@ -176,6 +197,16 @@ function dateString(value) {
     return undefined;
   }
   return value instanceof Date ? value.toISOString() : String(value);
+}
+
+function dateOnlyString(value) {
+  if (value instanceof Date) {
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
+    return `${value.getFullYear()}-${month}-${day}`;
+  }
+  const serialized = dateString(value);
+  return serialized ? serialized.slice(0, 10) : undefined;
 }
 
 function toStringArray(value) {

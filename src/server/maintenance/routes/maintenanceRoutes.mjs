@@ -49,6 +49,21 @@ export function createMaintenanceRouter({ workorderService, analyticsService }) 
         return sendEnvelope(response, result.data, result);
       }
 
+      if (match.name === 'mtbf') {
+        const result = await analyticsService.listReliabilityMtbf(query);
+        return sendEnvelope(response, result.data, result);
+      }
+
+      if (match.name === 'mttr') {
+        const result = await analyticsService.listReliabilityMttr(query);
+        return sendEnvelope(response, result.data, result);
+      }
+
+      if (match.name === 'machineHealth') {
+        const result = await analyticsService.listMachineHealth(query);
+        return sendEnvelope(response, result.data, result);
+      }
+
       if (match.name === 'holdReasons') {
         const result = await analyticsService.listHoldReasons(query);
         return sendEnvelope(response, result.data, result);
@@ -83,6 +98,15 @@ export function matchRoute(pathname) {
   }
   if (pathname === '/api/maintenance/analytics/mtbf-mttr') {
     return { name: 'mtbfMttr', params: {} };
+  }
+  if (pathname === '/api/maintenance/analytics/mtbf' || pathname === '/api/maintenance/analytics/mtbf_by_machine') {
+    return { name: 'mtbf', params: {} };
+  }
+  if (pathname === '/api/maintenance/analytics/mttr' || pathname === '/api/maintenance/analytics/mttr_by_machine') {
+    return { name: 'mttr', params: {} };
+  }
+  if (pathname === '/api/maintenance/analytics/machine-health' || pathname === '/api/maintenance/analytics/machine_health_score') {
+    return { name: 'machineHealth', params: {} };
   }
   if (pathname === '/api/maintenance/analytics/hold-reasons') {
     return { name: 'holdReasons', params: {} };

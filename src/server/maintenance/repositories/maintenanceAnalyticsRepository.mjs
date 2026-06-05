@@ -6,6 +6,12 @@ const MTBF_FILTERS = {
   job_type: { column: 'job_type' },
 };
 
+const RELIABILITY_VIEW_SOURCES = {
+  mtbf: 'mtbf_by_machine',
+  mttr: 'mttr_by_machine',
+  machineHealth: 'machine_health_score',
+};
+
 const HOLD_FILTERS = {
   site: { column: 'site' },
   department: { column: 'department' },
@@ -21,6 +27,27 @@ export function createMaintenanceAnalyticsRepository(db) {
     buildMtbfMttrQuery,
     async listMtbfMttr(filters = {}) {
       const query = buildMtbfMttrQuery(filters);
+      const result = await db.query(query.text, query.values);
+      return listResult(result.rows, query.limit, query.offset);
+    },
+
+    buildReliabilityMtbfQuery,
+    async listReliabilityMtbf(filters = {}) {
+      const query = buildReliabilityMtbfQuery(filters);
+      const result = await db.query(query.text, query.values);
+      return listResult(result.rows, query.limit, query.offset);
+    },
+
+    buildReliabilityMttrQuery,
+    async listReliabilityMttr(filters = {}) {
+      const query = buildReliabilityMttrQuery(filters);
+      const result = await db.query(query.text, query.values);
+      return listResult(result.rows, query.limit, query.offset);
+    },
+
+    buildMachineHealthQuery,
+    async listMachineHealth(filters = {}) {
+      const query = buildMachineHealthQuery(filters);
       const result = await db.query(query.text, query.values);
       return listResult(result.rows, query.limit, query.offset);
     },
@@ -87,6 +114,131 @@ export function buildMtbfMttrQuery(filters = {}) {
     limit,
     offset,
   };
+}
+
+export function buildReliabilityMtbfQuery(filters = {}) {
+  return buildReliabilityQuery(filters, {
+    sourceView: RELIABILITY_VIEW_SOURCES.mtbf,
+    orderBy: 'mtbf_hours ASC NULLS LAST, failure_count DESC, total_downtime_hours DESC',
+  });
+}
+
+export function buildReliabilityMttrQuery(filters = {}) {
+  return buildReliabilityQuery(filters, {
+    sourceView: RELIABILITY_VIEW_SOURCES.mttr,
+    orderBy: 'mttr_minutes DESC NULLS LAST, failure_count DESC, total_downtime_hours DESC',
+  });
+}
+
+export function buildMachineHealthQuery(filters = {}) {
+  return buildReliabilityQuery(filters, {
+    sourceView: RELIABILITY_VIEW_SOURCES.machineHealth,
+    orderBy: 'health_score ASC NULLS LAST, failure_count DESC, total_downtime_hours DESC',
+  });
+}
+
+function buildReliabilityQuery(filters = {}, { sourceView, orderBy }) {
+  const { limit, offset } = parsePagination(filters);
+  const values = [];
+  const predicates = [];
+
+  addReliabilityFilter(predicates, values, filters.period_month, `date_trunc('month', base.failure_start)::date = $VALUE::date`);
+  addReliabilityFilter(predicates, values, filters.machine_no ?? filters.equipment_no, `base.equipment_no = $VALUE`);
+  addReliabilityFilter(predicates, values, filters.machine_type ?? filters.equipment_type, `coalesce(equipment.equipment_type, '') = $VALUE`);
+  addReliabilitySectionFilter(predicates, values, filters.section);
+  addDateWindow(predicates, values, 'base.failure_start', filters.from, filters.to);
+
+  const finalWhere = predicates.length ? `WHERE ${predicates.join(' AND ')}` : '';
+  values.push(limit, offset);
+
+  return {
+    text: `WITH reliability AS (
+             SELECT
+               date_trunc('month', base.failure_start)::date AS period_month,
+               coalesce(equipment.department, equipment.location, equipment.site, split_part(base.equipment_no, '-', 1)) AS section,
+               coalesce(equipment.equipment_type, 'unknown') AS machine_type,
+               base.equipment_no AS machine_no,
+               max(base.equipment_desc) AS machine_desc,
+               count(*)::int AS failure_count,
+               avg(base.hours_since_previous_repair) FILTER (WHERE base.hours_since_previous_repair > 0) AS mtbf_hours,
+               avg(base.total_repair_time_hours) AS mttr_hours,
+               avg(base.total_repair_time_hours) * 60 AS mttr_minutes,
+               coalesce(sum(base.down_time_hours), 0) AS total_downtime_hours,
+               max(base.failure_start) AS last_failure_at,
+               max(base.repair_end) AS last_repair_end
+             FROM maintenance.v_mtbf_mttr_base base
+             LEFT JOIN maintenance.equipment equipment ON equipment.equipment_no = base.equipment_no
+             ${finalWhere}
+             GROUP BY
+               date_trunc('month', base.failure_start)::date,
+               coalesce(equipment.department, equipment.location, equipment.site, split_part(base.equipment_no, '-', 1)),
+               coalesce(equipment.equipment_type, 'unknown'),
+               base.equipment_no
+           ),
+           scored AS (
+             SELECT *,
+               greatest(0, least(100,
+                 100
+                 - least(45, coalesce(failure_count, 0) * 8)
+                 - least(25, coalesce(mttr_hours, 0) * 3)
+                 - least(20, coalesce(total_downtime_hours, 0) * 0.8)
+                 + least(15, coalesce(mtbf_hours, 0) / 24)
+               )) AS health_score
+             FROM reliability
+           )
+           SELECT
+             period_month,
+             section,
+             machine_type,
+             machine_no,
+             machine_desc,
+             machine_no AS equipment_no,
+             machine_desc AS equipment_desc,
+             failure_count,
+             mtbf_hours,
+             mttr_hours,
+             mttr_minutes,
+             total_downtime_hours,
+             health_score,
+             CASE
+               WHEN health_score < 40 THEN 'critical'
+               WHEN health_score < 70 THEN 'watch'
+               ELSE 'healthy'
+             END AS health_band,
+             last_failure_at,
+             last_repair_end,
+             count(*) OVER() AS __total
+           FROM scored
+           ORDER BY period_month DESC NULLS LAST, ${orderBy}, machine_no
+           LIMIT $${values.length - 1} OFFSET $${values.length}`,
+    values,
+    limit,
+    offset,
+    sourceView,
+  };
+}
+
+function addReliabilityFilter(predicates, values, value, sqlTemplate) {
+  if (value === undefined || value === null || value === '') {
+    return;
+  }
+  values.push(value);
+  predicates.push(sqlTemplate.replace('$VALUE', `$${values.length}`));
+}
+
+function addReliabilitySectionFilter(predicates, values, value) {
+  if (value === undefined || value === null || value === '') {
+    return;
+  }
+  values.push(value);
+  predicates.push(`(
+    coalesce(equipment.department, '') = $${values.length}
+    OR coalesce(equipment.location, '') = $${values.length}
+    OR coalesce(equipment.site, '') = $${values.length}
+    OR base.equipment_no ILIKE $${values.length + 1}
+    OR coalesce(base.equipment_desc, '') ILIKE $${values.length + 1}
+  )`);
+  values.push(`${String(value)}%`);
 }
 
 export function buildHoldReasonsQuery(filters = {}) {
