@@ -16,6 +16,13 @@ import {
 export type WorkorderAgentRuntimeSource = 'runtime' | 'fallback';
 export type WorkorderAgentRuntimeStatus = 'success' | 'disabled' | 'timeout' | 'error' | 'invalid_response';
 export type WorkorderAgentRuntimeRequest = WorkorderRuntimeRequestInput;
+export type WorkorderAgentRuntimeEndpointMode = 'full_url' | 'base_url_path' | 'disabled';
+
+export interface WorkorderAgentRuntimeEndpointResolution {
+  mode: WorkorderAgentRuntimeEndpointMode;
+  url: string | null;
+  path?: string;
+}
 
 export interface WorkorderAgentRuntimeSuccess {
   status: 'success';
@@ -53,17 +60,20 @@ export async function requestWorkorderAgentRuntime(
 ): Promise<WorkorderAgentRuntimeResult> {
   const now = options.now ?? (() => new Date().toISOString());
   const requestedAt = now();
-  const endpoint = buildWorkorderAgentRuntimeUrl(options.baseUrl, options.path, options.endpointUrl);
-  const endpointPath = options.path ?? WORKORDER_AGENT_RUNTIME_PATH;
+  const endpoint = resolveWorkorderAgentRuntimeEndpoint(options.baseUrl, options.path, options.endpointUrl);
+  const timeoutMs = normalizeWorkorderAgentRuntimeTimeoutMs(options.timeoutMs ?? WORKORDER_AGENT_RUNTIME_TIMEOUT_MS);
   const runtimeRequest = buildWorkorderRuntimeRequest(request);
   const baseDiagnostics: WorkorderRuntimeContractDiagnostics = {
-    endpoint_url: endpoint ?? undefined,
-    endpoint_path: endpointPath,
+    endpoint_mode: endpoint.mode,
+    endpoint_url: endpoint.url ?? undefined,
+    endpoint_path: endpoint.path,
+    timeout_ms: timeoutMs,
+    request_source: runtimeRequest.request_source,
     client_trace_id: runtimeRequest.client_trace_id,
     payload_version: runtimeRequest.payload_version,
   };
 
-  if (!endpoint) {
+  if (!endpoint.url) {
     const completedAt = now();
     return runtimeFailure(
       'disabled',
@@ -76,13 +86,12 @@ export async function requestWorkorderAgentRuntime(
     );
   }
 
-  const timeoutMs = normalizeTimeoutMs(options.timeoutMs ?? WORKORDER_AGENT_RUNTIME_TIMEOUT_MS);
   const fetchImpl = options.fetchImpl ?? fetch;
   const controller = new AbortController();
   const timeoutId = globalThis.setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetchImpl(endpoint, {
+    const response = await fetchImpl(endpoint.url, {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -161,19 +170,51 @@ export function buildWorkorderAgentRuntimeUrl(
   path = WORKORDER_AGENT_RUNTIME_PATH,
   endpointUrl = WORKORDER_AGENT_RUNTIME_ENDPOINT_URL,
 ): string | null {
+  return resolveWorkorderAgentRuntimeEndpoint(baseUrl, path, endpointUrl).url;
+}
+
+export function resolveWorkorderAgentRuntimeEndpoint(
+  baseUrl = WORKORDER_AGENT_RUNTIME_BASE_URL,
+  path = WORKORDER_AGENT_RUNTIME_PATH,
+  endpointUrl = WORKORDER_AGENT_RUNTIME_ENDPOINT_URL,
+): WorkorderAgentRuntimeEndpointResolution {
   const trimmedEndpointUrl = endpointUrl.trim();
   if (trimmedEndpointUrl) {
-    return trimmedEndpointUrl;
+    return {
+      mode: 'full_url',
+      url: trimmedEndpointUrl,
+    };
   }
 
   const trimmedBaseUrl = baseUrl.trim();
+  const normalizedPath = normalizeRuntimePath(path);
   if (!trimmedBaseUrl) {
-    return null;
+    return {
+      mode: 'disabled',
+      url: null,
+      path: normalizedPath,
+    };
   }
 
   const normalizedBase = trimmedBaseUrl.replace(/\/+$/, '');
-  const normalizedPath = path.trim() ? (path.startsWith('/') ? path : `/${path}`) : '';
-  return `${normalizedBase}${normalizedPath}`;
+  return {
+    mode: 'base_url_path',
+    url: `${normalizedBase}${normalizedPath}`,
+    path: normalizedPath,
+  };
+}
+
+export function normalizeWorkorderAgentRuntimeTimeoutMs(value: unknown): number {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0 ? value : 10000;
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 10000;
+  }
+
+  return 10000;
 }
 
 async function parseRuntimeJsonResponse(response: Response): Promise<unknown> {
@@ -209,8 +250,13 @@ function runtimeFailure(
   };
 }
 
-function normalizeTimeoutMs(value: number): number {
-  return Number.isFinite(value) && value > 0 ? value : 10000;
+function normalizeRuntimePath(path: string): string {
+  const trimmedPath = path.trim();
+  if (!trimmedPath) {
+    return '';
+  }
+
+  return trimmedPath.startsWith('/') ? trimmedPath : `/${trimmedPath}`;
 }
 
 function isAbortError(error: unknown): boolean {

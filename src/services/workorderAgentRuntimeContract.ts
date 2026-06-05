@@ -50,8 +50,11 @@ export interface WorkorderRuntimeErrorEnvelope {
 }
 
 export interface WorkorderRuntimeContractDiagnostics {
+  endpoint_mode?: 'full_url' | 'base_url_path' | 'disabled';
   endpoint_url?: string;
   endpoint_path?: string;
+  timeout_ms?: number;
+  request_source?: string;
   client_trace_id?: string;
   runtime_trace_id?: string;
   payload_version?: string;
@@ -162,8 +165,11 @@ export function buildWorkorderRuntimeDiagnosticPayload(
       payload_version: diagnostics.payload_version ?? WORKORDER_RUNTIME_RESPONSE_PAYLOAD_VERSION,
     },
     request_context: {
+      endpoint_mode: diagnostics.endpoint_mode,
       endpoint_url: diagnostics.endpoint_url,
       endpoint_path: diagnostics.endpoint_path,
+      timeout_ms: diagnostics.timeout_ms,
+      request_source: diagnostics.request_source,
       client_trace_id: diagnostics.client_trace_id,
       error_code: diagnostics.error_code,
     },

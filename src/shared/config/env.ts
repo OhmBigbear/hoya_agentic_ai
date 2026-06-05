@@ -20,6 +20,18 @@ export const WORKORDER_AGENT_RUNTIME_TIMEOUT_MS = Number(
   processEnv.VITE_WORKORDER_AGENT_RUNTIME_TIMEOUT_MS ||
   10000,
 );
+export const WORKORDER_WIDGET_SHADOW_MODE_ENABLED = readBooleanEnv(
+  import.meta.env.VITE_WORKORDER_WIDGET_SHADOW_MODE_ENABLED ||
+  processEnv.VITE_WORKORDER_WIDGET_SHADOW_MODE_ENABLED,
+);
+export const WORKORDER_WIDGET_DEV_PREVIEW_ENABLED = readBooleanEnv(
+  import.meta.env.VITE_WORKORDER_WIDGET_DEV_PREVIEW_ENABLED ||
+  processEnv.VITE_WORKORDER_WIDGET_DEV_PREVIEW_ENABLED,
+);
+export const WORKORDER_AGENT_RUNTIME_PREVIEW_ENABLED = readBooleanEnv(
+  import.meta.env.VITE_WORKORDER_AGENT_RUNTIME_PREVIEW_ENABLED ||
+  processEnv.VITE_WORKORDER_AGENT_RUNTIME_PREVIEW_ENABLED,
+);
 
 export const MAINTENANCE_API_BASE_URL =
   import.meta.env.VITE_MAINTENANCE_API_BASE_URL ||
@@ -27,3 +39,8 @@ export const MAINTENANCE_API_BASE_URL =
   processEnv.VITE_MAINTENANCE_API_BASE_URL ||
   processEnv.MAINTENANCE_API_BASE_URL ||
   'http://localhost:3101';
+
+function readBooleanEnv(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}

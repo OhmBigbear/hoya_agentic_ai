@@ -254,8 +254,31 @@ try {
   assert.match(initialAssistantMarkup, /Ask for maintenance blockers, repeat failures, parts risk, or actions for the selected workorder/);
   assert.match(initialAssistantMarkup, /data-testid="maintenance-copilot-scroll-area"/);
   assert.match(initialAssistantMarkup, /min-h-0 flex-1 overflow-hidden p-4/);
+  assert.doesNotMatch(initialAssistantMarkup, /data-testid="runtime-preview-diagnostics"/);
+  assert.doesNotMatch(initialAssistantMarkup, /Fetch runtime/);
   assert.doesNotMatch(initialAssistantMarkup, new RegExp(staleTemplateText));
   assert.doesNotMatch(initialAssistantMarkup, new RegExp(staleFallbackText));
+
+  let runtimeFetchCalls = 0;
+  const runtimePanelElement = page.RuntimeFetchDiagnosticsPanel({
+    source: 'fixture',
+    runtimeStatus: {
+      status: 'idle',
+      source: 'fixture',
+    },
+    isRuntimeLoading: false,
+    onRuntimeFetch: async () => {
+      runtimeFetchCalls += 1;
+    },
+  });
+  const runtimePanelMarkup = renderToStaticMarkup(runtimePanelElement);
+  assert.match(runtimePanelMarkup, /Runtime fetch/);
+  assert.match(runtimePanelMarkup, /status idle source fixture/);
+  assert.match(runtimePanelMarkup, /Fetch runtime/);
+  const fetchRuntimeButton = findElement(runtimePanelElement, (element) => element.props?.children === 'Fetch runtime');
+  assert.ok(fetchRuntimeButton?.props?.onClick);
+  fetchRuntimeButton.props.onClick();
+  assert.equal(runtimeFetchCalls, 1);
 
   const assistantMarkup = renderToStaticMarkup(React.createElement(page.MaintenanceAssistantPanel, {
     isOpen: true,
@@ -380,3 +403,23 @@ try {
 }
 
 console.log('Operations workspace UI tests passed.');
+
+function findElement(node, predicate) {
+  if (!React.isValidElement(node)) {
+    return null;
+  }
+
+  if (predicate(node)) {
+    return node;
+  }
+
+  const children = React.Children.toArray(node.props?.children);
+  for (const child of children) {
+    const found = findElement(child, predicate);
+    if (found) {
+      return found;
+    }
+  }
+
+  return null;
+}

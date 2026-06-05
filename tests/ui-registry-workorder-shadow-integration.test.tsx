@@ -30,9 +30,10 @@ const summary: MaintenanceDashboardSummary = {
 
 describe('workorder widget shadow integration', () => {
   it('keeps the page-local shadow flag disabled by default', () => {
-    const source = fs.readFileSync('src/pages/maintenance/MaintenanceWorkorderTrackingPage.tsx', 'utf8');
+    const source = fs.readFileSync('src/shared/config/env.ts', 'utf8');
 
-    expect(source).toContain('const WORKORDER_WIDGET_SHADOW_MODE_ENABLED = false;');
+    expect(source).toContain('VITE_WORKORDER_WIDGET_SHADOW_MODE_ENABLED');
+    expect(source).toContain('readBooleanEnv');
   });
 
   it('does not render widget registry output in the assistant panel when the flag is disabled', () => {

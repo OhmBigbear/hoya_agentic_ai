@@ -8,8 +8,33 @@ The adapter selects the endpoint from:
 
 - `VITE_WORKORDER_AGENT_RUNTIME_URL` as a full endpoint override.
 - `VITE_WORKORDER_AGENT_RUNTIME_BASE_URL` plus `VITE_WORKORDER_AGENT_RUNTIME_PATH`.
+- `VITE_WORKORDER_AGENT_RUNTIME_TIMEOUT_MS` as a positive millisecond timeout. Invalid, empty, zero, or negative values fall back to `10000`.
 
 If no base URL or full endpoint URL is configured, the adapter returns a diagnostics-only disabled payload and does not call `fetch`. Core logic does not hardcode localhost.
+
+Example disabled-by-default configuration:
+
+```dotenv
+VITE_WORKORDER_AGENT_RUNTIME_URL=
+VITE_WORKORDER_AGENT_RUNTIME_BASE_URL=
+VITE_WORKORDER_AGENT_RUNTIME_PATH=/api/workorder-agent/runtime
+VITE_WORKORDER_AGENT_RUNTIME_TIMEOUT_MS=10000
+```
+
+Example full URL mode:
+
+```dotenv
+VITE_WORKORDER_AGENT_RUNTIME_URL=https://agentic-core.example.com/api/workorder-agent/runtime
+VITE_WORKORDER_AGENT_RUNTIME_TIMEOUT_MS=10000
+```
+
+Example base URL + path mode:
+
+```dotenv
+VITE_WORKORDER_AGENT_RUNTIME_BASE_URL=https://agentic-core.example.com
+VITE_WORKORDER_AGENT_RUNTIME_PATH=/api/workorder-agent/runtime
+VITE_WORKORDER_AGENT_RUNTIME_TIMEOUT_MS=10000
+```
 
 ## Request Envelope
 
@@ -70,7 +95,10 @@ The helper `parseWorkorderRuntimeError()` also accepts legacy `error.code` and t
 
 Runtime diagnostics expose:
 
+- endpoint mode: `full_url`, `base_url_path`, or `disabled`
 - endpoint URL/path selected
+- timeout in milliseconds
+- request source
 - `client_trace_id`
 - runtime `trace_id` when returned
 - request/response `payload_version`

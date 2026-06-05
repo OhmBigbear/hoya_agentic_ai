@@ -67,6 +67,11 @@ import {
   type WorkorderAgentRuntimeResult,
 } from '../../services/workorderAgentRuntimeApi';
 import { buildWorkorderRuntimeDiagnosticPayload } from '../../services/workorderAgentRuntimeContract';
+import {
+  WORKORDER_AGENT_RUNTIME_PREVIEW_ENABLED,
+  WORKORDER_WIDGET_DEV_PREVIEW_ENABLED,
+  WORKORDER_WIDGET_SHADOW_MODE_ENABLED,
+} from '../../shared/config/env';
 import type {
   MaintenanceDashboardSummary,
   MaintenanceHoldHistory,
@@ -128,8 +133,11 @@ interface RuntimeFetchDiagnosticsState {
   completedAt?: string;
   errorReason?: string;
   payload?: unknown;
+  endpointMode?: string;
   endpointUrl?: string;
   endpointPath?: string;
+  timeoutMs?: number;
+  requestSource?: string;
   clientTraceId?: string;
   runtimeTraceId?: string;
   payloadVersion?: string;
@@ -157,8 +165,6 @@ const defaultFilters: WorkorderFilters = {
 };
 
 const pageSize = 12;
-const WORKORDER_WIDGET_SHADOW_MODE_ENABLED = false;
-const WORKORDER_WIDGET_DEV_PREVIEW_ENABLED = false;
 
 const emptySummary: MaintenanceDashboardSummary = {
   open_workorder_count: 0,
@@ -493,8 +499,11 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
         completedAt: result.completedAt,
         errorReason: 'Runtime response did not match the Workorder Agent payload envelope',
         payload: buildWorkorderRuntimeDiagnosticPayload('runtime_invalid_response', 'Runtime response did not match the Workorder Agent payload envelope', 'error', result.diagnostics),
+        endpointMode: result.diagnostics.endpoint_mode,
         endpointUrl: result.diagnostics.endpoint_url,
         endpointPath: result.diagnostics.endpoint_path,
+        timeoutMs: result.diagnostics.timeout_ms,
+        requestSource: result.diagnostics.request_source,
         clientTraceId: result.diagnostics.client_trace_id,
         runtimeTraceId: result.diagnostics.runtime_trace_id,
         payloadVersion: result.diagnostics.payload_version,
@@ -510,8 +519,11 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
       completedAt: result.completedAt,
       errorReason: result.status === 'success' ? undefined : result.errorReason,
       payload: result.payload,
+      endpointMode: result.diagnostics.endpoint_mode,
       endpointUrl: result.diagnostics.endpoint_url,
       endpointPath: result.diagnostics.endpoint_path,
+      timeoutMs: result.diagnostics.timeout_ms,
+      requestSource: result.diagnostics.request_source,
       clientTraceId: result.diagnostics.client_trace_id,
       runtimeTraceId: result.diagnostics.runtime_trace_id,
       payloadVersion: result.diagnostics.payload_version,
@@ -1197,6 +1209,8 @@ export function MaintenanceAssistantPanel({
   runtimeFetchDiagnostics?: RuntimeFetchDiagnosticsState;
   onRuntimeFetch?: () => Promise<void>;
 }) {
+  const showRuntimeDiagnostics = WORKORDER_AGENT_RUNTIME_PREVIEW_ENABLED && WORKORDER_WIDGET_DEV_PREVIEW_ENABLED;
+
   return (
     <div
       className={`absolute inset-y-0 right-0 z-20 w-96 max-w-[calc(100vw-2rem)] border-l border-white/10 bg-[#0f1623] flex flex-col shadow-2xl shadow-black/40 transition-transform duration-300 ease-out ${
@@ -1299,6 +1313,12 @@ export function MaintenanceAssistantPanel({
             </details>
           </div>
         )}
+        {showRuntimeDiagnostics && (
+          <StandaloneRuntimeFetchDiagnostics
+            runtimeFetchDiagnostics={runtimeFetchDiagnostics}
+            onRuntimeFetch={onRuntimeFetch}
+          />
+        )}
         <div className="mb-3">
           <p className="text-xs text-slate-400 mb-2">Ask the Copilot:</p>
           <div className="space-y-1">
@@ -1369,7 +1389,7 @@ function AssistantStructuredBlocks({
           payload={runtimeFetchDiagnostics?.payload ?? message.workspacePayload}
           source={runtimeFetchDiagnostics?.source ?? 'fixture'}
           runtimeStatus={runtimeFetchDiagnostics}
-          onRuntimeFetch={onRuntimeFetch}
+          onRuntimeFetch={WORKORDER_AGENT_RUNTIME_PREVIEW_ENABLED ? onRuntimeFetch : undefined}
         />
       )}
       {hasInsights && (
@@ -1410,6 +1430,25 @@ function AssistantStructuredBlocks({
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+function StandaloneRuntimeFetchDiagnostics({
+  runtimeFetchDiagnostics,
+  onRuntimeFetch,
+}: {
+  runtimeFetchDiagnostics?: RuntimeFetchDiagnosticsState;
+  onRuntimeFetch?: () => Promise<void>;
+}) {
+  return (
+    <div className="mb-3 rounded border border-cyan-400/20 bg-[#141b2e] p-2" data-testid="runtime-preview-diagnostics">
+      <RuntimeFetchDiagnosticsPanel
+        source={runtimeFetchDiagnostics?.source ?? 'fixture'}
+        runtimeStatus={runtimeFetchDiagnostics}
+        isRuntimeLoading={runtimeFetchDiagnostics?.status === 'loading'}
+        onRuntimeFetch={onRuntimeFetch}
+      />
     </div>
   );
 }
@@ -1535,7 +1574,7 @@ export function DeveloperWidgetRegistryPreview({
   );
 }
 
-function RuntimeFetchDiagnosticsPanel({
+export function RuntimeFetchDiagnosticsPanel({
   source,
   runtimeStatus,
   isRuntimeLoading,
@@ -1567,8 +1606,11 @@ function RuntimeFetchDiagnosticsPanel({
         ) : null}
       </div>
       {runtimeStatus?.errorReason ? <p className="mt-1 break-words text-amber-200">reason {runtimeStatus.errorReason}</p> : null}
+      {runtimeStatus?.endpointMode ? <p className="mt-1 break-words">endpoint_mode {runtimeStatus.endpointMode}</p> : null}
       {runtimeStatus?.endpointUrl ? <p className="mt-1 break-words">endpoint_url {runtimeStatus.endpointUrl}</p> : null}
       {runtimeStatus?.endpointPath ? <p className="mt-1 break-words">endpoint_path {runtimeStatus.endpointPath}</p> : null}
+      {typeof runtimeStatus?.timeoutMs === 'number' ? <p className="mt-1 break-words">timeout_ms {runtimeStatus.timeoutMs}</p> : null}
+      {runtimeStatus?.requestSource ? <p className="mt-1 break-words">request_source {runtimeStatus.requestSource}</p> : null}
       {runtimeStatus?.clientTraceId ? <p className="mt-1 break-words">client_trace_id {runtimeStatus.clientTraceId}</p> : null}
       {runtimeStatus?.runtimeTraceId ? <p className="mt-1 break-words">runtime_trace_id {runtimeStatus.runtimeTraceId}</p> : null}
       {runtimeStatus?.payloadVersion ? <p className="mt-1 break-words">payload_version {runtimeStatus.payloadVersion}</p> : null}

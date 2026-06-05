@@ -37,10 +37,14 @@ const summary: MaintenanceDashboardSummary = {
 describe('workorder widget developer preview', () => {
   it('keeps developer preview and shadow flags disabled by default', () => {
     const source = fs.readFileSync('src/pages/maintenance/MaintenanceWorkorderTrackingPage.tsx', 'utf8');
+    const envSource = fs.readFileSync('src/shared/config/env.ts', 'utf8');
 
-    expect(source).toContain('const WORKORDER_WIDGET_SHADOW_MODE_ENABLED = false;');
-    expect(source).toContain('const WORKORDER_WIDGET_DEV_PREVIEW_ENABLED = false;');
+    expect(envSource).toContain('VITE_WORKORDER_WIDGET_SHADOW_MODE_ENABLED');
+    expect(envSource).toContain('VITE_WORKORDER_WIDGET_DEV_PREVIEW_ENABLED');
+    expect(envSource).toContain('VITE_WORKORDER_AGENT_RUNTIME_PREVIEW_ENABLED');
+    expect(envSource).toContain("return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';");
     expect(source).toContain('WORKORDER_WIDGET_SHADOW_MODE_ENABLED && WORKORDER_WIDGET_DEV_PREVIEW_ENABLED');
+    expect(source).toContain('WORKORDER_AGENT_RUNTIME_PREVIEW_ENABLED && WORKORDER_WIDGET_DEV_PREVIEW_ENABLED');
   });
 
   it('does not render the developer preview by default and keeps existing assistant output', () => {
@@ -140,8 +144,11 @@ describe('workorder widget developer preview', () => {
         requestedAt: '2026-06-05T00:00:00.000Z',
         completedAt: '2026-06-05T00:00:01.000Z',
         payload: runtimeWorkorderAgentResponse,
+        endpointMode: 'base_url_path',
         endpointUrl: 'https://agentic-core.example.com/api/workorder-agent/runtime',
         endpointPath: '/api/workorder-agent/runtime',
+        timeoutMs: 10000,
+        requestSource: 'hoya_ui.developer_diagnostics',
         clientTraceId: 'client-trace-021-b09',
         runtimeTraceId: 'trace-runtime-workorder-021',
         payloadVersion: '2.0',
@@ -155,8 +162,11 @@ describe('workorder widget developer preview', () => {
     expect(markup).toContain('agent_id maint-workorder-agent');
     expect(markup).toContain('run_id run-runtime-021-b07');
     expect(markup).toContain('payload_version 2.0');
+    expect(markup).toContain('endpoint_mode base_url_path');
     expect(markup).toContain('endpoint_url https://agentic-core.example.com/api/workorder-agent/runtime');
     expect(markup).toContain('endpoint_path /api/workorder-agent/runtime');
+    expect(markup).toContain('timeout_ms 10000');
+    expect(markup).toContain('request_source hoya_ui.developer_diagnostics');
     expect(markup).toContain('client_trace_id client-trace-021-b09');
     expect(markup).toContain('runtime_trace_id trace-runtime-workorder-021');
     expect(markup).toContain('Runtime diagnostics');
@@ -178,11 +188,19 @@ describe('workorder widget developer preview', () => {
         status: 'disabled',
         source: 'fallback',
         errorReason: 'Workorder Agent runtime endpoint is not configured',
+        endpointMode: 'disabled',
+        endpointPath: '/api/workorder-agent/runtime',
+        timeoutMs: 10000,
+        requestSource: 'hoya_ui.developer_diagnostics',
       }} />,
     );
 
     expect(markup).toContain('status disabled source fallback');
     expect(markup).toContain('reason Workorder Agent runtime endpoint is not configured');
+    expect(markup).toContain('endpoint_mode disabled');
+    expect(markup).toContain('endpoint_path /api/workorder-agent/runtime');
+    expect(markup).toContain('timeout_ms 10000');
+    expect(markup).toContain('request_source hoya_ui.developer_diagnostics');
     expect(markup).toContain('runtime_disabled');
     expect(markup).toContain('Workorder Agent runtime endpoint is not configured');
   });
