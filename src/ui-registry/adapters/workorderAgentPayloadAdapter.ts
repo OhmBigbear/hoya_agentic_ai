@@ -90,7 +90,7 @@ export interface NormalizedWorkorderAgentPayload {
 }
 
 type WorkorderTableRow = Record<string, string | number | boolean | null>;
-type RuntimeWidgetType = 'workorder_summary' | 'workorder_table' | 'workorder_list' | 'workorder_status_insight';
+type RuntimeWidgetType = 'workorder_summary' | 'workorder_table' | 'workorder_list' | 'workorder_status_insight' | 'workorder_insight';
 
 const regionIds = new Set<string>(maintenanceWorkordersRegionIds);
 const supportedRuntimeWidgetPayloadVersion = '1.0';
@@ -520,7 +520,8 @@ function mapRuntimeWidgetContract(
         rows,
       };
     }
-    case 'workorder_status_insight': {
+    case 'workorder_status_insight':
+    case 'workorder_insight': {
       const insights = normalizeRecordArray(payload.insights ?? payload.items).map((item, index) => {
         const id = getText(item.id) ?? `status-insight-${index + 1}`;
         const title = getText(item.title);
@@ -572,7 +573,8 @@ function isRuntimeWidgetType(value: string): value is RuntimeWidgetType {
   return value === 'workorder_summary'
     || value === 'workorder_table'
     || value === 'workorder_list'
-    || value === 'workorder_status_insight';
+    || value === 'workorder_status_insight'
+    || value === 'workorder_insight';
 }
 
 function normalizeRuntimeSummaryItems(value: unknown): NonNullable<Extract<UiWidget, { type: 'summary_card' }>['items']> {

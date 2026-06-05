@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import {
   Activity,
   AlertCircle,
@@ -148,6 +148,46 @@ interface RuntimeFetchDiagnosticsState {
   errorCode?: string;
 }
 
+export interface WorkorderRuntimeWidgetWorkspaceState {
+  status: 'idle' | 'loading' | 'ready' | 'invalid' | 'error';
+  source: 'copilot' | RuntimeFetchDiagnosticsState['source'];
+  requestedAt?: string;
+  completedAt?: string;
+  errorReason?: string;
+  payload?: unknown;
+  widgets: UiWidget[];
+  rejectedWidgetCount: number;
+  runtimeDiagnosticCount: number;
+  widgetTypes: string[];
+  payloadVersion?: string;
+  payloadType?: string;
+  intent?: string;
+  traceMetadata?: ReturnType<typeof normalizeWorkorderAgentPayload>['traceMetadata'];
+  diagnostics: {
+    validationStatus: 'valid' | 'partial' | 'invalid' | 'empty';
+    agentId?: string;
+    traceId?: string;
+    runId?: string;
+    runtimeTraceId?: string;
+    clientTraceId?: string;
+    payloadVersion?: string;
+    widgetTypes: string[];
+  };
+}
+
+const emptyRuntimeWidgetWorkspaceState: WorkorderRuntimeWidgetWorkspaceState = {
+  status: 'idle',
+  source: 'fixture',
+  widgets: [],
+  rejectedWidgetCount: 0,
+  runtimeDiagnosticCount: 0,
+  widgetTypes: [],
+  diagnostics: {
+    validationStatus: 'empty',
+    widgetTypes: [],
+  },
+};
+
 export interface WorkorderFilters {
   search: string;
   status: string;
@@ -212,6 +252,7 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
     status: 'idle',
     source: 'fixture',
   });
+  const [runtimeWidgetWorkspaceState, setRuntimeWidgetWorkspaceState] = useState<WorkorderRuntimeWidgetWorkspaceState>(emptyRuntimeWidgetWorkspaceState);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -437,6 +478,15 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
           },
         }));
       }
+      if (preview.workspace_payload) {
+        setRuntimeWidgetWorkspaceState(buildWorkorderRuntimeWidgetWorkspaceState({
+          payload: preview.workspace_payload,
+          source: 'copilot',
+          completedAt: preview.created_at,
+          runtimeTraceId: preview.trace_id,
+          payloadVersion: preview.workspace_payload.payload_version,
+        }));
+      }
       const actionResults = applyLiveUiActions(preview.ui_actions);
 
       setMessages((current) => [
@@ -471,10 +521,17 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
 
   const handleRuntimeFetch = useCallback(async () => {
     const question = inputMessage.trim() || 'Summarize current maintenance blockers';
+    const requestedAt = new Date().toISOString();
     setRuntimeFetchDiagnostics({
       status: 'loading',
       source: 'fallback',
-      requestedAt: new Date().toISOString(),
+      requestedAt,
+    });
+    setRuntimeWidgetWorkspaceState({
+      ...emptyRuntimeWidgetWorkspaceState,
+      status: 'loading',
+      source: 'fallback',
+      requestedAt,
     });
 
     const result = await runtimeRequest({
@@ -496,13 +553,14 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
     });
 
     if (result.status === 'success' && !isWorkorderAgentPayloadLike(result.payload)) {
+      const diagnosticPayload = buildWorkorderRuntimeDiagnosticPayload('runtime_invalid_response', 'Runtime response did not match the Workorder Agent payload envelope', 'error', result.diagnostics);
       setRuntimeFetchDiagnostics({
         status: 'invalid_response',
         source: 'fallback',
         requestedAt: result.requestedAt,
         completedAt: result.completedAt,
         errorReason: 'Runtime response did not match the Workorder Agent payload envelope',
-        payload: buildWorkorderRuntimeDiagnosticPayload('runtime_invalid_response', 'Runtime response did not match the Workorder Agent payload envelope', 'error', result.diagnostics),
+        payload: diagnosticPayload,
         endpointMode: result.diagnostics.endpoint_mode,
         endpointUrl: result.diagnostics.endpoint_url,
         endpointPath: result.diagnostics.endpoint_path,
@@ -513,10 +571,20 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
         payloadVersion: result.diagnostics.payload_version,
         errorCode: result.diagnostics.error_code,
       });
+      setRuntimeWidgetWorkspaceState(buildWorkorderRuntimeWidgetWorkspaceState({
+        payload: diagnosticPayload,
+        source: 'fallback',
+        requestedAt: result.requestedAt,
+        completedAt: result.completedAt,
+        errorReason: 'Runtime response did not match the Workorder Agent payload envelope',
+        runtimeTraceId: result.diagnostics.runtime_trace_id,
+        clientTraceId: result.diagnostics.client_trace_id,
+        payloadVersion: result.diagnostics.payload_version,
+      }));
       return;
     }
 
-    setRuntimeFetchDiagnostics({
+    const nextRuntimeFetchDiagnostics: RuntimeFetchDiagnosticsState = {
       status: result.status,
       source: result.source,
       requestedAt: result.requestedAt,
@@ -532,7 +600,18 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
       runtimeTraceId: result.diagnostics.runtime_trace_id,
       payloadVersion: result.diagnostics.payload_version,
       errorCode: result.diagnostics.error_code,
-    });
+    };
+    setRuntimeFetchDiagnostics(nextRuntimeFetchDiagnostics);
+    setRuntimeWidgetWorkspaceState(buildWorkorderRuntimeWidgetWorkspaceState({
+      payload: result.payload,
+      source: result.source,
+      requestedAt: result.requestedAt,
+      completedAt: result.completedAt,
+      errorReason: result.status === 'success' ? undefined : result.errorReason,
+      runtimeTraceId: result.diagnostics.runtime_trace_id,
+      clientTraceId: result.diagnostics.client_trace_id,
+      payloadVersion: result.diagnostics.payload_version,
+    }));
   }, [filters, inputMessage, operationsWorkspace.state, runtimeRequest, selectedWorkorder]);
 
   return (
@@ -565,6 +644,7 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
             {WORKORDER_AGENT_RUNTIME_PREVIEW_ENABLED ? (
               <WorkorderRuntimeMainSurface
                 runtimeStatus={runtimeFetchDiagnostics}
+                workspaceState={runtimeWidgetWorkspaceState}
                 onRuntimeFetch={handleRuntimeFetch}
               />
             ) : null}
@@ -642,51 +722,179 @@ export function buildMaintenanceApiErrorMessage(failures: string[], requestCount
 const mainRuntimeRegionOrder = [
   'maintenance.workorders.kpi.summary',
   'maintenance.workorders.table',
+  'maintenance.workorders.evidence',
   'maintenance.workorders.insights',
+  'maintenance.workorders.actions.readonly',
 ] as const;
 
 const mainRuntimeRegionLabels: Record<(typeof mainRuntimeRegionOrder)[number], string> = {
-  'maintenance.workorders.kpi.summary': 'Runtime summary',
-  'maintenance.workorders.table': 'Runtime workorders',
-  'maintenance.workorders.insights': 'Runtime insights',
+  'maintenance.workorders.kpi.summary': 'Executive Summary',
+  'maintenance.workorders.table': 'Workorder Analysis',
+  'maintenance.workorders.evidence': 'Evidence Summary',
+  'maintenance.workorders.insights': 'Operational Insights',
+  'maintenance.workorders.actions.readonly': 'Recommended Actions',
 };
+
+export function buildWorkorderRuntimeWidgetWorkspaceState({
+  payload,
+  source,
+  requestedAt,
+  completedAt,
+  errorReason,
+  runtimeTraceId,
+  clientTraceId,
+  payloadVersion,
+}: {
+  payload?: unknown;
+  source: WorkorderRuntimeWidgetWorkspaceState['source'];
+  requestedAt?: string;
+  completedAt?: string;
+  errorReason?: string;
+  runtimeTraceId?: string;
+  clientTraceId?: string;
+  payloadVersion?: string;
+}): WorkorderRuntimeWidgetWorkspaceState {
+  if (payload === undefined) {
+    return {
+      ...emptyRuntimeWidgetWorkspaceState,
+      source,
+      requestedAt,
+      completedAt,
+      errorReason,
+    };
+  }
+
+  try {
+    const widgets = adaptWorkorderAgentPayloadToWidgets(payload, {
+      emptyMessage: 'No runtime workorder widgets are available for the current context.',
+    });
+    const normalized = normalizeWorkorderAgentPayload(payload);
+    const mainWidgets = widgets.filter(isMainRuntimeWidget);
+    const widgetTypes = normalized.runtimeWidgets
+      .map((widget) => String(widget.metadata?.runtimeWidgetType ?? widget.type))
+      .filter((widgetType, index, allTypes) => widgetType && allTypes.indexOf(widgetType) === index);
+    const hasCompatibleWidgets = mainWidgets.some((widget) => widget.type !== 'empty_state' && widget.type !== 'error_state');
+    const isPayloadLike = isWorkorderAgentPayloadLike(payload);
+    const status = normalized.error || !isPayloadLike ? 'invalid' : errorReason ? 'error' : 'ready';
+    const validationStatus = !isPayloadLike || normalized.error
+      ? 'invalid'
+      : hasCompatibleWidgets && normalized.rejectedWidgets.length === 0
+        ? 'valid'
+        : hasCompatibleWidgets
+          ? 'partial'
+          : 'empty';
+
+    return {
+      status,
+      source,
+      requestedAt,
+      completedAt,
+      errorReason: errorReason ?? normalized.error?.message,
+      payload,
+      widgets,
+      rejectedWidgetCount: normalized.rejectedWidgets.length,
+      runtimeDiagnosticCount: normalized.runtimeDiagnostics.length,
+      widgetTypes,
+      payloadVersion: normalized.payloadVersion ?? payloadVersion,
+      payloadType: normalized.payloadType,
+      intent: normalized.intent,
+      traceMetadata: normalized.traceMetadata,
+      diagnostics: {
+        validationStatus,
+        agentId: normalized.traceMetadata?.agent_id,
+        traceId: normalized.traceMetadata?.trace_id,
+        runId: normalized.traceMetadata?.run_id,
+        runtimeTraceId,
+        clientTraceId,
+        payloadVersion: normalized.traceMetadata?.payload_version ?? normalized.payloadVersion ?? payloadVersion,
+        widgetTypes,
+      },
+    };
+  } catch (error) {
+    return {
+      status: 'invalid',
+      source,
+      requestedAt,
+      completedAt,
+      errorReason: error instanceof Error ? error.message : 'Runtime widget payload could not be adapted',
+      payload,
+      widgets: [],
+      rejectedWidgetCount: 0,
+      runtimeDiagnosticCount: 0,
+      widgetTypes: [],
+      payloadVersion,
+      diagnostics: {
+        validationStatus: 'invalid',
+        runtimeTraceId,
+        clientTraceId,
+        payloadVersion,
+        widgetTypes: [],
+      },
+    };
+  }
+}
 
 export function WorkorderRuntimeMainSurface({
   runtimeStatus,
+  workspaceState,
   onRuntimeFetch,
 }: {
   runtimeStatus?: RuntimeFetchDiagnosticsState;
+  workspaceState?: WorkorderRuntimeWidgetWorkspaceState;
   onRuntimeFetch?: () => Promise<void>;
 }) {
-  const isLoading = runtimeStatus?.status === 'loading';
-  const payload = runtimeStatus?.payload;
-  const hasPayload = payload !== undefined;
-  const widgets = useMemo(() => (
-    hasPayload
-      ? adaptWorkorderAgentPayloadToWidgets(payload, {
-        emptyMessage: 'No runtime workorder widgets are available for the current context.',
-      })
-      : []
-  ), [hasPayload, payload]);
-  const normalized = useMemo(() => (hasPayload ? normalizeWorkorderAgentPayload(payload) : null), [hasPayload, payload]);
+  const derivedWorkspaceState = useMemo(() => {
+    if (workspaceState) {
+      return workspaceState;
+    }
+    if (!runtimeStatus?.payload) {
+      return runtimeStatus?.status === 'loading'
+        ? { ...emptyRuntimeWidgetWorkspaceState, status: 'loading' as const, source: runtimeStatus.source, requestedAt: runtimeStatus.requestedAt }
+        : emptyRuntimeWidgetWorkspaceState;
+    }
+    return buildWorkorderRuntimeWidgetWorkspaceState({
+      payload: runtimeStatus.payload,
+      source: runtimeStatus.source,
+      requestedAt: runtimeStatus.requestedAt,
+      completedAt: runtimeStatus.completedAt,
+      errorReason: runtimeStatus.errorReason,
+      runtimeTraceId: runtimeStatus.runtimeTraceId,
+      clientTraceId: runtimeStatus.clientTraceId,
+      payloadVersion: runtimeStatus.payloadVersion,
+    });
+  }, [runtimeStatus, workspaceState]);
+  const isLoading = runtimeStatus?.status === 'loading' || derivedWorkspaceState.status === 'loading';
+  const hasPayload = derivedWorkspaceState.payload !== undefined;
+  const widgets = derivedWorkspaceState.widgets;
+  const normalized = useMemo(() => (hasPayload ? normalizeWorkorderAgentPayload(derivedWorkspaceState.payload) : null), [derivedWorkspaceState.payload, hasPayload]);
   const mainWidgets = widgets.filter(isMainRuntimeWidget);
-  const rejectedCount = normalized?.rejectedWidgets.length ?? 0;
+  const rejectedCount = derivedWorkspaceState.rejectedWidgetCount || normalized?.rejectedWidgets.length || 0;
+  const hasRenderableMainWidgets = derivedWorkspaceState.status !== 'invalid' && mainWidgets.some((widget) => widget.type !== 'empty_state' && widget.type !== 'error_state');
   const hasError = runtimeStatus?.status && runtimeStatus.status !== 'idle' && runtimeStatus.status !== 'loading' && runtimeStatus.status !== 'success';
+  const executiveWidgets = mainWidgets.filter((widget) => widget.regionId === 'maintenance.workorders.kpi.summary');
+  const insightWidgets = mainWidgets.filter((widget): widget is Extract<UiWidget, { type: 'insight_list' }> => widget.regionId === 'maintenance.workorders.insights' && widget.type === 'insight_list');
+  const tableWidgets = mainWidgets.filter((widget) => widget.regionId === 'maintenance.workorders.table');
+  const evidenceWidgets = mainWidgets.filter((widget) => widget.regionId === 'maintenance.workorders.evidence');
+  const actionWidgets = mainWidgets.filter((widget): widget is Extract<UiWidget, { type: 'action_list_readonly' }> => widget.regionId === 'maintenance.workorders.actions.readonly' && widget.type === 'action_list_readonly');
+  const executiveKpis = buildRuntimeExecutiveKpis(derivedWorkspaceState, executiveWidgets, tableWidgets, insightWidgets);
 
   return (
     <section
-      className="mb-6 rounded-lg border border-cyan-400/20 bg-[#101827] p-4"
+      className="mb-6 rounded-lg border border-cyan-400/20 bg-[#101827] p-4 lg:p-5"
       aria-label="Workorder runtime widgets"
       data-testid="workorder-runtime-main-surface"
     >
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div>
-          <p className="text-[11px] uppercase text-cyan-300/80">Agent Runtime Widgets</p>
-          <h3 className="mt-1 text-sm font-semibold text-white">Workorder Tracking Runtime View</h3>
+      <div className="mb-5 flex flex-col gap-3 min-[900px]:flex-row min-[900px]:items-start min-[900px]:justify-between">
+        <div className="max-w-3xl">
+          <p className="text-[11px] font-medium uppercase text-cyan-300/80">Workorder Intelligence Workspace</p>
+          <h3 className="mt-1 text-xl font-semibold text-white">Runtime workorder operating picture</h3>
+          <p className="mt-1 text-sm text-slate-400">
+            Agent-generated workorder context, prioritized for operator review. Runtime actions remain read-only and navigation-only.
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          {runtimeStatus?.source ? (
-            <Badge className="bg-slate-700/70 text-slate-200 border-slate-500/30">{runtimeStatus.source}</Badge>
+        <div className="flex flex-wrap items-center gap-2">
+          {derivedWorkspaceState.source ? (
+            <Badge className="bg-slate-700/70 text-slate-200 border-slate-500/30">{derivedWorkspaceState.source}</Badge>
           ) : null}
           {onRuntimeFetch ? (
             <Button
@@ -704,60 +912,389 @@ export function WorkorderRuntimeMainSurface({
       </div>
 
       {isLoading ? (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3" data-testid="workorder-runtime-main-loading">
-          {[0, 1, 2].map((index) => (
-            <div key={index} className="h-24 rounded border border-white/5 bg-[#1e293b] animate-pulse" />
-          ))}
+        <div className="space-y-4" data-testid="workorder-runtime-main-loading">
+          <div className="rounded-lg border border-cyan-400/20 bg-[#0f1623] p-4">
+            <div className="h-4 w-48 rounded bg-cyan-300/20 animate-pulse" />
+            <div className="mt-2 h-3 w-72 max-w-full rounded bg-slate-500/20 animate-pulse" />
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {[0, 1, 2, 3].map((index) => (
+              <div key={index} className="h-28 rounded-lg border border-white/5 bg-[#1e293b] animate-pulse" />
+            ))}
+          </div>
         </div>
-      ) : hasPayload && mainWidgets.length > 0 ? (
-        <div className="space-y-4" data-testid="workorder-runtime-main-widgets">
-          {mainRuntimeRegionOrder.map((regionId) => {
-            const regionWidgets = mainWidgets.filter((widget) => widget.regionId === regionId);
-            if (regionWidgets.length === 0) {
-              return null;
-            }
+      ) : hasPayload && hasRenderableMainWidgets ? (
+        <div className="space-y-5" data-testid="workorder-runtime-main-widgets">
+          <RuntimeWorkspaceSection
+            eyebrow={mainRuntimeRegionLabels['maintenance.workorders.kpi.summary']}
+            title="Current workorder posture"
+            description="The four indicators operators need before deciding where to inspect next."
+            testId="workorder-runtime-executive-summary"
+          >
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {executiveKpis.map((kpi) => (
+                <RuntimeKpiCard key={kpi.label} label={kpi.label} value={kpi.value} helper={kpi.helper} tone={kpi.tone} />
+              ))}
+            </div>
+          </RuntimeWorkspaceSection>
 
-            return (
-              <div key={regionId} className="rounded border border-white/10 bg-[#141b2e] p-3">
-                <p className="mb-2 text-[11px] uppercase text-slate-500">{mainRuntimeRegionLabels[regionId]}</p>
-                <div className={regionId === 'maintenance.workorders.kpi.summary' ? 'grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3' : 'space-y-3'}>
-                  {regionWidgets.map((widget, index) => (
-                    <div key={`${widget.id}-${index}`} className="rounded border border-white/10 bg-[#0f1623] p-3 text-sm text-slate-300 [&_button]:mt-2 [&_button]:rounded [&_button]:border [&_button]:border-cyan-400/30 [&_button]:px-2 [&_button]:py-1 [&_button]:text-xs [&_button]:text-cyan-200 [&_dd]:mb-1 [&_dd]:text-white [&_dt]:text-xs [&_dt]:text-slate-500 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:text-white [&_h4]:text-sm [&_h4]:font-medium [&_h4]:text-white [&_p]:mt-1 [&_p]:text-xs [&_p]:text-slate-400 [&_table]:mt-2 [&_table]:w-full [&_td]:border-t [&_td]:border-white/5 [&_td]:px-2 [&_td]:py-2 [&_td]:text-xs [&_th]:px-2 [&_th]:py-2 [&_th]:text-left [&_th]:text-xs [&_th]:uppercase [&_th]:text-slate-500 [&_ul]:mt-2 [&_ul]:space-y-2">
-                      {renderUiWidget(widget, {
-                        surface: maintenanceWorkordersSurface,
-                        fallbackMode: 'compact',
-                        onReadonlyAction: handleMainSurfaceReadonlyAction,
-                      })}
-                    </div>
+          {insightWidgets.length > 0 ? (
+            <RuntimeWorkspaceSection
+              eyebrow={mainRuntimeRegionLabels['maintenance.workorders.insights']}
+              title="Issues that need attention"
+              description="Business-readable findings from the runtime payload, with severity and confidence separated from diagnostics."
+              testId="workorder-runtime-operational-insights"
+            >
+              <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                {insightWidgets.flatMap((widget) => (widget.insights ?? []).map((insight) => (
+                  <RuntimeInsightCard
+                    key={`${widget.id}-${insight.id}`}
+                    insight={insight}
+                    fallbackConfidence={executiveKpis.find((kpi) => kpi.label === 'Confidence')?.value}
+                  />
+                )))}
+              </div>
+            </RuntimeWorkspaceSection>
+          ) : null}
+
+          {(tableWidgets.length > 0 || evidenceWidgets.length > 0) ? (
+            <RuntimeWorkspaceSection
+              eyebrow={mainRuntimeRegionLabels['maintenance.workorders.table']}
+              title="Sample review and evidence"
+              description="Workorder rows and supporting evidence are grouped for fast inspection without exposing raw payload blocks."
+              testId="workorder-runtime-workorder-analysis"
+            >
+              <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
+                <div className="min-w-0 space-y-3">
+                  {tableWidgets.map((widget, index) => (
+                    <RuntimeRenderedWidgetFrame key={`${widget.id}-${index}`} widget={widget} />
                   ))}
                 </div>
+                <div className="min-w-0 space-y-3">
+                  <RuntimeEvidenceSummary workspaceState={derivedWorkspaceState} evidenceWidgets={evidenceWidgets} />
+                </div>
               </div>
-            );
-          })}
+            </RuntimeWorkspaceSection>
+          ) : null}
+
+          {actionWidgets.length > 0 ? (
+            <RuntimeWorkspaceSection
+              eyebrow={mainRuntimeRegionLabels['maintenance.workorders.actions.readonly']}
+              title="Read-only next steps"
+              description="These actions prepare navigation or inspection context only. They do not mutate backend workorder data."
+              testId="workorder-runtime-readonly-recommendations"
+            >
+              <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+                {actionWidgets.flatMap((widget) => (widget.actions ?? []).map((action) => (
+                  <RuntimeReadonlyActionCard key={`${widget.id}-${action.id}`} widgetId={widget.id} action={action} />
+                )))}
+              </div>
+            </RuntimeWorkspaceSection>
+          ) : null}
+
           {rejectedCount > 0 ? (
-            <div className="rounded border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-100" data-testid="workorder-runtime-main-fallback">
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-100" data-testid="workorder-runtime-main-fallback">
               {rejectedCount} runtime widget payload{rejectedCount === 1 ? '' : 's'} could not be rendered and were safely ignored.
             </div>
           ) : null}
+          <RuntimeDiagnosticsDisclosure workspaceState={derivedWorkspaceState} rejectedCount={rejectedCount} />
         </div>
       ) : hasPayload ? (
-        <div className="rounded border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-100" data-testid="workorder-runtime-main-fallback">
-          Runtime payload was received, but no supported main-surface workorder widgets were renderable.
-          {runtimeStatus?.errorReason ? <span> {runtimeStatus.errorReason}</span> : null}
+        <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100" data-testid="workorder-runtime-main-fallback">
+          <h4 className="text-sm font-semibold text-amber-50">Runtime payload needs review</h4>
+          <p className="mt-1">
+            Runtime data was received, but no supported workorder workspace widgets were available for this surface.
+            {derivedWorkspaceState.errorReason ? <span> {derivedWorkspaceState.errorReason}</span> : null}
+          </p>
+          <RuntimeDiagnosticsDisclosure workspaceState={derivedWorkspaceState} rejectedCount={rejectedCount} />
         </div>
       ) : (
-        <div className="rounded border border-dashed border-cyan-400/30 bg-[#0f1623] p-3 text-xs text-slate-400" data-testid="workorder-runtime-main-empty">
-          No runtime workorder widget payload has been loaded for this page context.
+        <div className="rounded-lg border border-dashed border-cyan-400/30 bg-[#0f1623] p-5 text-sm text-slate-300" data-testid="workorder-runtime-main-empty">
+          <h4 className="text-base font-semibold text-white">No runtime workorder intelligence loaded</h4>
+          <p className="mt-1 max-w-2xl text-slate-400">
+            Ask Copilot for a workorder review or refresh the runtime connection to populate this workspace with operator-facing insights.
+          </p>
         </div>
       )}
 
       {hasError ? (
-        <div className="mt-3 rounded border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-100" role="alert" data-testid="workorder-runtime-main-error">
-          Runtime widgets are unavailable{runtimeStatus?.errorReason ? `: ${runtimeStatus.errorReason}` : '.'}
+        <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-100" role="alert" data-testid="workorder-runtime-main-error">
+          Runtime widgets are unavailable{(derivedWorkspaceState.errorReason ?? runtimeStatus?.errorReason) ? `: ${derivedWorkspaceState.errorReason ?? runtimeStatus?.errorReason}` : '.'}
         </div>
       ) : null}
     </section>
   );
+}
+
+function RuntimeWorkspaceSection({
+  eyebrow,
+  title,
+  description,
+  testId,
+  children,
+}: {
+  eyebrow: string;
+  title: string;
+  description: string;
+  testId: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="rounded-lg border border-white/10 bg-[#141b2e] p-4" data-testid={testId}>
+      <div className="mb-4 flex flex-col gap-1">
+        <p className="text-[11px] font-medium uppercase text-cyan-300/80">{eyebrow}</p>
+        <h4 className="text-base font-semibold text-white">{title}</h4>
+        <p className="max-w-3xl text-xs leading-5 text-slate-400">{description}</p>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function RuntimeKpiCard({
+  label,
+  value,
+  helper,
+  tone,
+}: {
+  label: string;
+  value: string;
+  helper: string;
+  tone: 'neutral' | 'good' | 'warning' | 'critical';
+}) {
+  const toneClassName = tone === 'critical'
+    ? 'border-red-400/30 bg-red-500/10 text-red-100'
+    : tone === 'warning'
+      ? 'border-amber-400/30 bg-amber-500/10 text-amber-100'
+      : tone === 'good'
+        ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-100'
+        : 'border-cyan-400/20 bg-[#101827] text-cyan-100';
+
+  return (
+    <div className={`min-h-[116px] rounded-lg border p-4 ${toneClassName}`}>
+      <p className="text-[11px] font-medium uppercase text-slate-300">{label}</p>
+      <div className="mt-3 text-3xl font-semibold leading-none text-white">{value}</div>
+      <p className="mt-3 text-xs leading-5 text-slate-400">{helper}</p>
+    </div>
+  );
+}
+
+function RuntimeInsightCard({
+  insight,
+  fallbackConfidence,
+}: {
+  insight: NonNullable<Extract<UiWidget, { type: 'insight_list' }>['insights']>[number];
+  fallbackConfidence?: string;
+}) {
+  const severity = normalizeRuntimeDisplayValue(insight.severity) || 'Review';
+  const confidence = normalizeRuntimeDisplayValue(getMetadataText(insight.metadata, 'confidence')) || fallbackConfidence || 'Review';
+  const recommendation = getMetadataText(insight.metadata, 'suggestedAction')
+    || getMetadataText(insight.metadata, 'suggested_action')
+    || 'Review the related workorders and confirm the operational context before acting.';
+
+  return (
+    <article className="rounded-lg border border-white/10 bg-[#0f1623] p-4" data-testid="workorder-runtime-insight-card">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge className={getSeverityBadgeClassName(severity)}>{severity}</Badge>
+        <Badge className="border-cyan-400/20 bg-cyan-500/10 text-cyan-100">Confidence {confidence}</Badge>
+      </div>
+      <h5 className="mt-3 text-sm font-semibold text-white">{insight.title}</h5>
+      {insight.summary ? <p className="mt-2 text-sm leading-6 text-slate-300">{insight.summary}</p> : null}
+      <div className="mt-4 rounded border border-white/10 bg-[#141b2e] p-3">
+        <p className="text-[11px] font-medium uppercase text-slate-500">Recommendation</p>
+        <p className="mt-1 text-xs leading-5 text-slate-300">{recommendation}</p>
+      </div>
+    </article>
+  );
+}
+
+function RuntimeRenderedWidgetFrame({ widget }: { widget: UiWidget }) {
+  return (
+    <div className="min-w-0 overflow-x-auto rounded-lg border border-white/10 bg-[#0f1623] p-3 text-sm text-slate-300 [&_button]:mt-2 [&_button]:rounded [&_button]:border [&_button]:border-cyan-400/30 [&_button]:px-2 [&_button]:py-1 [&_button]:text-xs [&_button]:text-cyan-200 [&_dd]:mb-1 [&_dd]:text-white [&_dt]:text-xs [&_dt]:text-slate-500 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:text-white [&_h4]:text-sm [&_h4]:font-medium [&_h4]:text-white [&_p]:mt-1 [&_p]:text-xs [&_p]:text-slate-400 [&_table]:mt-3 [&_table]:w-full [&_td]:border-t [&_td]:border-white/5 [&_td]:px-2 [&_td]:py-2 [&_td]:text-xs [&_th]:px-2 [&_th]:py-2 [&_th]:text-left [&_th]:text-xs [&_th]:uppercase [&_th]:text-slate-500 [&_ul]:mt-2 [&_ul]:space-y-2">
+      {renderUiWidget(widget, {
+        surface: maintenanceWorkordersSurface,
+        fallbackMode: 'compact',
+        onReadonlyAction: handleMainSurfaceReadonlyAction,
+      })}
+    </div>
+  );
+}
+
+function RuntimeEvidenceSummary({
+  workspaceState,
+  evidenceWidgets,
+}: {
+  workspaceState: WorkorderRuntimeWidgetWorkspaceState;
+  evidenceWidgets: UiWidget[];
+}) {
+  const evidenceCount = evidenceWidgets.reduce((count, widget) => count + (widget.type === 'evidence_list' ? widget.evidenceRefs.length : 0), 0);
+  const traceId = workspaceState.diagnostics.traceId ?? workspaceState.diagnostics.runtimeTraceId ?? 'not provided';
+
+  return (
+    <aside className="rounded-lg border border-white/10 bg-[#0f1623] p-4" data-testid="workorder-runtime-evidence-summary">
+      <p className="text-[11px] font-medium uppercase text-slate-500">Evidence Summary</p>
+      <dl className="mt-3 grid grid-cols-2 gap-3 text-xs">
+        <div>
+          <dt className="text-slate-500">Evidence refs</dt>
+          <dd className="mt-1 text-lg font-semibold text-white">{evidenceCount}</dd>
+        </div>
+        <div>
+          <dt className="text-slate-500">Diagnostics</dt>
+          <dd className="mt-1 text-lg font-semibold text-white">{workspaceState.runtimeDiagnosticCount}</dd>
+        </div>
+      </dl>
+      <p className="mt-3 break-words text-xs leading-5 text-slate-400">Trace: {traceId}</p>
+      {evidenceWidgets.length > 0 ? (
+        <div className="mt-3 space-y-3">
+          {evidenceWidgets.map((widget, index) => <RuntimeRenderedWidgetFrame key={`${widget.id}-${index}`} widget={widget} />)}
+        </div>
+      ) : null}
+    </aside>
+  );
+}
+
+function RuntimeReadonlyActionCard({
+  widgetId,
+  action,
+}: {
+  widgetId: string;
+  action: NonNullable<Extract<UiWidget, { type: 'action_list_readonly' }>['actions']>[number];
+}) {
+  return (
+    <article className="rounded-lg border border-cyan-400/20 bg-[#0f1623] p-4" data-testid="workorder-runtime-readonly-action-card">
+      <Badge className="border-cyan-400/20 bg-cyan-500/10 text-cyan-100">Readonly</Badge>
+      <h5 className="mt-3 text-sm font-semibold text-white">{action.label}</h5>
+      <p className="mt-2 text-xs leading-5 text-slate-400">{action.description ?? 'Open the related workorder context for review. No backend mutation is performed.'}</p>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="mt-4 h-8 border-cyan-400/30 px-3 text-xs text-cyan-200 hover:bg-cyan-500/10 hover:text-cyan-100"
+        onClick={() => handleMainSurfaceReadonlyAction({
+          widgetId,
+          actionId: action.id,
+          targetId: action.targetId,
+          metadata: action.metadata,
+        })}
+      >
+        Review
+      </Button>
+    </article>
+  );
+}
+
+function RuntimeDiagnosticsDisclosure({
+  workspaceState,
+  rejectedCount,
+}: {
+  workspaceState: WorkorderRuntimeWidgetWorkspaceState;
+  rejectedCount: number;
+}) {
+  const diagnostics = workspaceState.diagnostics;
+  const traceId = diagnostics.traceId ?? diagnostics.runtimeTraceId;
+
+  return (
+    <details className="rounded-lg border border-white/10 bg-[#0f1623] p-3 text-xs text-slate-400" data-testid="workorder-runtime-main-diagnostics">
+      <summary className="cursor-pointer select-none font-medium text-slate-300">Developer diagnostics</summary>
+      <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1">
+        <span>validation {diagnostics.validationStatus}</span>
+        <span>rejected_widgets {rejectedCount}</span>
+        <span>runtime_diagnostics {workspaceState.runtimeDiagnosticCount}</span>
+        {diagnostics.payloadVersion ? <span>payload_version {diagnostics.payloadVersion}</span> : null}
+        {traceId ? <span>trace_id {traceId}</span> : null}
+        {diagnostics.agentId ? <span>agent_id {diagnostics.agentId}</span> : null}
+        {diagnostics.runId ? <span>run_id {diagnostics.runId}</span> : null}
+        {diagnostics.widgetTypes.length > 0 ? <span>widget_types {diagnostics.widgetTypes.join(', ')}</span> : null}
+      </div>
+    </details>
+  );
+}
+
+function buildRuntimeExecutiveKpis(
+  workspaceState: WorkorderRuntimeWidgetWorkspaceState,
+  executiveWidgets: UiWidget[],
+  tableWidgets: UiWidget[],
+  insightWidgets: Array<Extract<UiWidget, { type: 'insight_list' }>>,
+): Array<{ label: string; value: string; helper: string; tone: 'neutral' | 'good' | 'warning' | 'critical' }> {
+  const rows = tableWidgets.flatMap((widget) => widget.type === 'data_table' ? widget.rows ?? [] : []);
+  const summaryItems = executiveWidgets.flatMap((widget) => widget.type === 'summary_card' ? widget.items ?? [] : []);
+  const openCount = findRuntimeSummaryValue(summaryItems, ['open', 'open workorders', 'open runtime workorders']);
+  const riskCandidates = rows.filter((row) => {
+    const priority = String(row.priority ?? row.Priority ?? '').toLowerCase();
+    return priority.includes('critical') || priority.includes('high');
+  }).length || insightWidgets.flatMap((widget) => widget.insights ?? []).filter((insight) => {
+    const severity = String(insight.severity ?? '').toLowerCase();
+    return severity.includes('critical') || severity.includes('warning') || severity.includes('high');
+  }).length;
+  const confidence = getRuntimePayloadConfidence(workspaceState.payload);
+
+  return [
+    {
+      label: 'Total Matching Work Orders',
+      value: String(rows.length || openCount || 0),
+      helper: 'Runtime rows in the current workorder sample.',
+      tone: rows.length > 0 ? 'neutral' : 'warning',
+    },
+    {
+      label: 'Open Work Orders',
+      value: String(openCount ?? rows.filter((row) => String(row.status ?? '').toLowerCase().includes('open')).length),
+      helper: 'Open work that may require operator follow-up.',
+      tone: Number(openCount ?? 0) > 0 ? 'warning' : 'good',
+    },
+    {
+      label: 'Risk Candidates',
+      value: String(riskCandidates),
+      helper: 'High, critical, or warning-ranked items in the runtime view.',
+      tone: riskCandidates > 0 ? 'critical' : 'good',
+    },
+    {
+      label: 'Confidence',
+      value: normalizeRuntimeDisplayValue(confidence) || 'Review',
+      helper: 'Runtime confidence reported by the workorder agent.',
+      tone: confidence && String(confidence).toLowerCase() === 'high' ? 'good' : 'neutral',
+    },
+  ];
+}
+
+function findRuntimeSummaryValue(items: Array<{ label: string; value: string | number | null }>, labels: string[]): number | undefined {
+  const match = items.find((item) => labels.includes(item.label.toLowerCase()));
+  const value = typeof match?.value === 'number' ? match.value : Number(match?.value);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function getRuntimePayloadConfidence(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') {
+    return undefined;
+  }
+  const summary = (payload as Record<string, unknown>).summary;
+  if (!summary || typeof summary !== 'object') {
+    return undefined;
+  }
+  const confidence = (summary as Record<string, unknown>).confidence;
+  return typeof confidence === 'string' ? confidence : undefined;
+}
+
+function getMetadataText(metadata: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = metadata?.[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function normalizeRuntimeDisplayValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  return String(value).replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function getSeverityBadgeClassName(severity: string): string {
+  const normalizedSeverity = severity.toLowerCase();
+  if (normalizedSeverity.includes('critical') || normalizedSeverity.includes('high')) {
+    return 'border-red-400/30 bg-red-500/10 text-red-100';
+  }
+  if (normalizedSeverity.includes('warning') || normalizedSeverity.includes('medium')) {
+    return 'border-amber-400/30 bg-amber-500/10 text-amber-100';
+  }
+  return 'border-emerald-400/30 bg-emerald-500/10 text-emerald-100';
 }
 
 function isMainRuntimeWidget(widget: UiWidget): boolean {
