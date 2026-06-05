@@ -55,6 +55,7 @@ describe('workorder runtime preview wiring', () => {
 
   it('does not render standalone diagnostics when only the runtime flag is enabled', async () => {
     vi.stubEnv('VITE_WORKORDER_AGENT_RUNTIME_PREVIEW_ENABLED', 'true');
+    vi.stubEnv('VITE_WORKORDER_WIDGET_DEV_PREVIEW_ENABLED', 'false');
     vi.resetModules();
 
     const page = await import('../src/pages/maintenance/MaintenanceWorkorderTrackingPage');

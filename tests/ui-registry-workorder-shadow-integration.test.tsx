@@ -2,7 +2,12 @@ import fs from 'node:fs';
 
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.hoisted(() => {
+  process.env.VITE_WORKORDER_WIDGET_DEV_PREVIEW_ENABLED = 'false';
+  process.env.VITE_WORKORDER_AGENT_RUNTIME_PREVIEW_ENABLED = 'false';
+});
 
 import { MaintenanceAssistantPanel } from '../src/pages/maintenance/MaintenanceWorkorderTrackingPage';
 import {

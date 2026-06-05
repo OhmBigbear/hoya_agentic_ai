@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
+vi.hoisted(() => {
+  delete process.env.VITE_WORKORDER_AGENT_RUNTIME_PATH;
+  delete process.env.VITE_WORKORDER_AGENT_RUNTIME_TIMEOUT_MS;
+});
+
 import {
   buildWorkorderAgentRuntimeUrl,
   normalizeWorkorderAgentRuntimeTimeoutMs,

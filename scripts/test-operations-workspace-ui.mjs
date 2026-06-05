@@ -6,6 +6,8 @@ import { createServer } from 'vite';
 process.env.VITE_APP_MODE = 'mock';
 process.env.VITE_AGENTIC_CORE_API_BASE_URL = 'http://agentic-core.test';
 process.env.VITE_MAINTENANCE_API_BASE_URL = 'http://maintenance-runtime.test';
+process.env.VITE_WORKORDER_AGENT_RUNTIME_PREVIEW_ENABLED = 'false';
+process.env.VITE_WORKORDER_WIDGET_DEV_PREVIEW_ENABLED = 'false';
 
 const server = await createServer({
   appType: 'custom',

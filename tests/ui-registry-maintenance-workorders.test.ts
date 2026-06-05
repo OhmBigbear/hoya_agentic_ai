@@ -25,6 +25,8 @@ const expectedRegionIds = [
 const expectedActionTargetIds = [
   'maintenance.workorders.actions.view_workorder',
   'maintenance.workorders.actions.view_machine',
+  'maintenance.workorders.actions.view_history',
+  'maintenance.workorders.actions.show_details',
   'maintenance.workorders.actions.view_workorder_history',
   'maintenance.workorders.actions.view_delay_analysis',
   'maintenance.workorders.actions.view_bottleneck',

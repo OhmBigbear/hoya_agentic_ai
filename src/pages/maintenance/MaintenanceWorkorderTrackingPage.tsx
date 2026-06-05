@@ -55,11 +55,15 @@ import {
   isWorkorderAgentPayloadLike,
   maintenanceWorkordersSurface,
   maintenanceWorkordersSurfaceId,
+  normalizeWorkorderAgentPayload,
+  renderUiWidget,
   renderUiWidgetList,
   readonlyActionExecutionPolicy,
   type ActionExecutionResult,
   type UiReadonlyActionEvent,
+  type UiWidget,
   type WorkorderWidgetShadowDiagnostics,
+  adaptWorkorderAgentPayloadToWidgets,
 } from '../../ui-registry';
 import {
   requestWorkorderAgentRuntime,
@@ -558,6 +562,13 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
               </div>
             )}
 
+            {WORKORDER_AGENT_RUNTIME_PREVIEW_ENABLED ? (
+              <WorkorderRuntimeMainSurface
+                runtimeStatus={runtimeFetchDiagnostics}
+                onRuntimeFetch={handleRuntimeFetch}
+              />
+            ) : null}
+
             <MaintenanceKpiCards loading={loading} kpis={kpis} />
 
             <MaintenanceWorkorderTable
@@ -626,6 +637,145 @@ export function buildMaintenanceApiErrorMessage(failures: string[], requestCount
   }
 
   return `Some maintenance data could not be loaded. Showing available API results. ${failures.join(' ')}`;
+}
+
+const mainRuntimeRegionOrder = [
+  'maintenance.workorders.kpi.summary',
+  'maintenance.workorders.table',
+  'maintenance.workorders.insights',
+] as const;
+
+const mainRuntimeRegionLabels: Record<(typeof mainRuntimeRegionOrder)[number], string> = {
+  'maintenance.workorders.kpi.summary': 'Runtime summary',
+  'maintenance.workorders.table': 'Runtime workorders',
+  'maintenance.workorders.insights': 'Runtime insights',
+};
+
+export function WorkorderRuntimeMainSurface({
+  runtimeStatus,
+  onRuntimeFetch,
+}: {
+  runtimeStatus?: RuntimeFetchDiagnosticsState;
+  onRuntimeFetch?: () => Promise<void>;
+}) {
+  const isLoading = runtimeStatus?.status === 'loading';
+  const payload = runtimeStatus?.payload;
+  const hasPayload = payload !== undefined;
+  const widgets = useMemo(() => (
+    hasPayload
+      ? adaptWorkorderAgentPayloadToWidgets(payload, {
+        emptyMessage: 'No runtime workorder widgets are available for the current context.',
+      })
+      : []
+  ), [hasPayload, payload]);
+  const normalized = useMemo(() => (hasPayload ? normalizeWorkorderAgentPayload(payload) : null), [hasPayload, payload]);
+  const mainWidgets = widgets.filter(isMainRuntimeWidget);
+  const rejectedCount = normalized?.rejectedWidgets.length ?? 0;
+  const hasError = runtimeStatus?.status && runtimeStatus.status !== 'idle' && runtimeStatus.status !== 'loading' && runtimeStatus.status !== 'success';
+
+  return (
+    <section
+      className="mb-6 rounded-lg border border-cyan-400/20 bg-[#101827] p-4"
+      aria-label="Workorder runtime widgets"
+      data-testid="workorder-runtime-main-surface"
+    >
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] uppercase text-cyan-300/80">Agent Runtime Widgets</p>
+          <h3 className="mt-1 text-sm font-semibold text-white">Workorder Tracking Runtime View</h3>
+        </div>
+        <div className="flex items-center gap-2">
+          {runtimeStatus?.source ? (
+            <Badge className="bg-slate-700/70 text-slate-200 border-slate-500/30">{runtimeStatus.source}</Badge>
+          ) : null}
+          {onRuntimeFetch ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-8 border-cyan-400/30 px-3 text-xs text-cyan-200 hover:bg-cyan-500/10 hover:text-cyan-100"
+              onClick={() => { void onRuntimeFetch(); }}
+              disabled={isLoading}
+            >
+              {isLoading ? 'Loading' : 'Refresh runtime'}
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3" data-testid="workorder-runtime-main-loading">
+          {[0, 1, 2].map((index) => (
+            <div key={index} className="h-24 rounded border border-white/5 bg-[#1e293b] animate-pulse" />
+          ))}
+        </div>
+      ) : hasPayload && mainWidgets.length > 0 ? (
+        <div className="space-y-4" data-testid="workorder-runtime-main-widgets">
+          {mainRuntimeRegionOrder.map((regionId) => {
+            const regionWidgets = mainWidgets.filter((widget) => widget.regionId === regionId);
+            if (regionWidgets.length === 0) {
+              return null;
+            }
+
+            return (
+              <div key={regionId} className="rounded border border-white/10 bg-[#141b2e] p-3">
+                <p className="mb-2 text-[11px] uppercase text-slate-500">{mainRuntimeRegionLabels[regionId]}</p>
+                <div className={regionId === 'maintenance.workorders.kpi.summary' ? 'grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3' : 'space-y-3'}>
+                  {regionWidgets.map((widget, index) => (
+                    <div key={`${widget.id}-${index}`} className="rounded border border-white/10 bg-[#0f1623] p-3 text-sm text-slate-300 [&_button]:mt-2 [&_button]:rounded [&_button]:border [&_button]:border-cyan-400/30 [&_button]:px-2 [&_button]:py-1 [&_button]:text-xs [&_button]:text-cyan-200 [&_dd]:mb-1 [&_dd]:text-white [&_dt]:text-xs [&_dt]:text-slate-500 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:text-white [&_h4]:text-sm [&_h4]:font-medium [&_h4]:text-white [&_p]:mt-1 [&_p]:text-xs [&_p]:text-slate-400 [&_table]:mt-2 [&_table]:w-full [&_td]:border-t [&_td]:border-white/5 [&_td]:px-2 [&_td]:py-2 [&_td]:text-xs [&_th]:px-2 [&_th]:py-2 [&_th]:text-left [&_th]:text-xs [&_th]:uppercase [&_th]:text-slate-500 [&_ul]:mt-2 [&_ul]:space-y-2">
+                      {renderUiWidget(widget, {
+                        surface: maintenanceWorkordersSurface,
+                        fallbackMode: 'compact',
+                        onReadonlyAction: handleMainSurfaceReadonlyAction,
+                      })}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+          {rejectedCount > 0 ? (
+            <div className="rounded border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-100" data-testid="workorder-runtime-main-fallback">
+              {rejectedCount} runtime widget payload{rejectedCount === 1 ? '' : 's'} could not be rendered and were safely ignored.
+            </div>
+          ) : null}
+        </div>
+      ) : hasPayload ? (
+        <div className="rounded border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-100" data-testid="workorder-runtime-main-fallback">
+          Runtime payload was received, but no supported main-surface workorder widgets were renderable.
+          {runtimeStatus?.errorReason ? <span> {runtimeStatus.errorReason}</span> : null}
+        </div>
+      ) : (
+        <div className="rounded border border-dashed border-cyan-400/30 bg-[#0f1623] p-3 text-xs text-slate-400" data-testid="workorder-runtime-main-empty">
+          No runtime workorder widget payload has been loaded for this page context.
+        </div>
+      )}
+
+      {hasError ? (
+        <div className="mt-3 rounded border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-100" role="alert" data-testid="workorder-runtime-main-error">
+          Runtime widgets are unavailable{runtimeStatus?.errorReason ? `: ${runtimeStatus.errorReason}` : '.'}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function isMainRuntimeWidget(widget: UiWidget): boolean {
+  return mainRuntimeRegionOrder.includes(widget.regionId as (typeof mainRuntimeRegionOrder)[number])
+    || widget.type === 'empty_state'
+    || widget.type === 'error_state';
+}
+
+export function handleMainSurfaceReadonlyAction(event: UiReadonlyActionEvent): ActionExecutionResult {
+  return executeReadonlyActionNoop({
+    action: {
+      id: event.actionId,
+      mode: 'readonly',
+      targetId: event.targetId,
+      metadata: event.metadata,
+    },
+    executionMode: readonlyActionExecutionPolicy.executionMode,
+  });
 }
 
 export function MaintenanceKpiCards({ loading, kpis }: { loading: boolean; kpis: ReturnType<typeof buildKpis> }) {
