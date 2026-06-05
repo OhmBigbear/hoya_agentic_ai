@@ -83,6 +83,16 @@ export const maintenanceWorkordersSurface: UiSurfaceDefinition = {
       metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect', executionPolicy: readonlyActionExecutionPolicy },
     },
     {
+      id: 'maintenance.workorders.actions.view_history',
+      label: 'View history',
+      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect', executionPolicy: readonlyActionExecutionPolicy },
+    },
+    {
+      id: 'maintenance.workorders.actions.show_details',
+      label: 'Show details',
+      metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect', executionPolicy: readonlyActionExecutionPolicy },
+    },
+    {
       id: 'maintenance.workorders.actions.view_workorder_history',
       label: 'View workorder history',
       metadata: { mode: 'readonly', scope: 'ui_navigation', intent: 'inspect', executionPolicy: readonlyActionExecutionPolicy },

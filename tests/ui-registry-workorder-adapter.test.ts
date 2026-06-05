@@ -177,10 +177,12 @@ describe('workorder agent payload adapter', () => {
     assertAllWidgetsValid(widgets);
   });
 
-  it('maps all six readonly action registry entries', () => {
+  it('maps readonly action registry entries', () => {
     expect(agentReadonlyActionIds).toEqual([
       'view_workorder',
       'view_machine',
+      'view_history',
+      'show_details',
       'view_workorder_history',
       'view_delay_analysis',
       'view_bottleneck',
@@ -388,10 +390,16 @@ describe('workorder agent payload adapter', () => {
       run_id: 'run-runtime-021-b07',
       payload_version: '2.0',
     });
-    expect(normalized.runtimeWidgets).toHaveLength(2);
-    expect(normalized.actions.filter((action) => action.valid)).toHaveLength(2);
+    expect(normalized.runtimeWidgets).toHaveLength(3);
+    expect(normalized.actions.filter((action) => action.valid).map((action) => action.actionId)).toEqual([
+      'view_workorder',
+      'view_machine',
+      'view_history',
+      'show_details',
+    ]);
     expect(widgets.some((widget) => widget.id === 'runtime-open-workorders')).toBe(true);
     expect(widgets.some((widget) => widget.id === 'runtime-workorder-table')).toBe(true);
+    expect(widgets.some((widget) => widget.id === 'runtime-status-insight')).toBe(true);
     assertAllWidgetsValid(widgets);
   });
 
@@ -416,7 +424,37 @@ describe('workorder agent payload adapter', () => {
     expect(normalized.rejectedWidgets).toHaveLength(2);
     expect(normalized.runtimeDiagnostics.map((diagnostic) => diagnostic.code)).toContain('runtime_widget_rejected');
     expect(widgets.some((widget) => widget.id === 'runtime-unsafe-widget')).toBe(false);
-    expect(widgets.some((widget) => widget.id === 'runtime-bad-region')).toBe(false);
+    expect(widgets.some((widget) => widget.id === 'runtime-bad-version')).toBe(false);
+    assertAllWidgetsValid(widgets);
+  });
+
+  it('keeps invalid runtime widget payloads in diagnostics only', () => {
+    const payload = {
+      ...runtimeWorkorderAgentResponse,
+      widgets: [
+        {
+          id: 'runtime-missing-payload',
+          payload_version: '1.0',
+          widget_type: 'workorder_table',
+        },
+        {
+          id: 'runtime-schema-mismatch',
+          payload_version: '1.0',
+          widget_type: 'workorder_summary',
+          payload: { items: [{ label: 'Boolean is not a summary value', value: true }] },
+        },
+      ],
+    };
+    const normalized = normalizeWorkorderAgentPayload(payload);
+    const widgets = adaptWorkorderAgentPayloadToWidgets(payload);
+
+    expect(normalized.rejectedWidgets.map((widget) => widget.widgetId)).toEqual([
+      'runtime-missing-payload',
+      'runtime-schema-mismatch',
+    ]);
+    expect(normalized.runtimeDiagnostics.map((diagnostic) => diagnostic.code)).toContain('runtime_widget_rejected');
+    expect(widgets.some((widget) => widget.id === 'runtime-missing-payload')).toBe(false);
+    expect(widgets.some((widget) => widget.id === 'runtime-schema-mismatch')).toBe(false);
     assertAllWidgetsValid(widgets);
   });
 

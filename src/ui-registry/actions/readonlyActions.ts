@@ -3,6 +3,8 @@ import type { UiActionTargetId } from '../types';
 export type AgentReadonlyActionId =
   | 'view_workorder'
   | 'view_machine'
+  | 'view_history'
+  | 'show_details'
   | 'view_workorder_history'
   | 'view_delay_analysis'
   | 'view_bottleneck'
@@ -92,6 +94,18 @@ const readonlyActionDefinitions = [
     label: 'View machine',
     targetId: 'maintenance.workorders.actions.view_machine',
     navigation: 'inspect_machine',
+  },
+  {
+    id: 'view_history',
+    label: 'View history',
+    targetId: 'maintenance.workorders.actions.view_history',
+    navigation: 'inspect_history',
+  },
+  {
+    id: 'show_details',
+    label: 'Show details',
+    targetId: 'maintenance.workorders.actions.show_details',
+    navigation: 'inspect_workorder',
   },
   {
     id: 'view_workorder_history',

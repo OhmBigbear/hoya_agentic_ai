@@ -280,32 +280,53 @@ export const runtimeWorkorderAgentResponse = {
   widgets: [
     {
       id: 'runtime-open-workorders',
-      type: 'kpi_card',
-      regionId: 'maintenance.workorders.kpi.summary',
+      payload_version: '1.0',
+      widget_type: 'workorder_summary',
       title: 'Open runtime workorders',
-      value: 7,
-      unit: 'orders',
-      trend: 'up',
+      summary: 'Runtime workload is concentrated on POLISHING-7A.',
+      payload: {
+        items: [
+          { label: 'Open', value: 7 },
+          { label: 'Trend', value: 'up' },
+        ],
+      },
     },
     {
       id: 'runtime-workorder-table',
-      type: 'data_table',
-      regionId: 'maintenance.workorders.table',
+      payload_version: '1.0',
+      widget_type: 'workorder_table',
       title: 'Runtime workorders',
-      columns: [
-        { id: 'workorder_no', label: 'Workorder', field: 'workorder_no' },
-        { id: 'equipment_no', label: 'Machine', field: 'equipment_no' },
-        { id: 'priority', label: 'Priority', field: 'priority' },
-      ],
-      rows: [
-        { workorder_no: 'WO-RUNTIME-100', equipment_no: 'POLISHING-7A', priority: 'High' },
-        { workorder_no: 'WO-RUNTIME-101', equipment_no: 'POLISHING-7A', priority: 'Critical' },
-      ],
+      payload: {
+        rows: [
+          { workorder_no: 'WO-RUNTIME-100', equipment_no: 'POLISHING-7A', priority: 'High' },
+          { workorder_no: 'WO-RUNTIME-101', equipment_no: 'POLISHING-7A', priority: 'Critical' },
+        ],
+      },
+    },
+    {
+      id: 'runtime-status-insight',
+      payload_version: '1.0',
+      widget_type: 'workorder_status_insight',
+      title: 'Runtime status insight',
+      payload: {
+        insights: [
+          {
+            id: 'runtime-status-open',
+            title: 'Open corrective concentration',
+            summary: 'Two high-priority runtime workorders are open for POLISHING-7A.',
+            severity: 'warning',
+            status: 'open',
+            equipment_no: 'POLISHING-7A',
+          },
+        ],
+      },
     },
   ],
   readonly_actions: [
     { id: 'view_workorder', mode: 'readonly', label: 'View WO-RUNTIME-100', target: 'WO-RUNTIME-100' },
     { id: 'view_machine', mode: 'readonly', label: 'View POLISHING-7A', target: 'POLISHING-7A' },
+    { id: 'view_history', mode: 'readonly', label: 'View history', target: 'WO-RUNTIME-100' },
+    { id: 'show_details', mode: 'readonly', label: 'Show details', target: 'WO-RUNTIME-100' },
   ],
   diagnostics: [
     {
@@ -332,16 +353,17 @@ export const unknownWidgetRuntimeWorkorderAgentResponse = {
     ...runtimeWorkorderAgentResponse.widgets,
     {
       id: 'runtime-unsafe-widget',
-      type: 'mutation_form',
-      regionId: 'maintenance.workorders.actions.readonly',
+      payload_version: '1.0',
+      widget_type: 'mutation_form',
       title: 'Unsafe mutation form',
+      payload: {},
     },
     {
-      id: 'runtime-bad-region',
-      type: 'kpi_card',
-      regionId: 'maintenance.workorders.production.writeback',
-      title: 'Bad region',
-      value: 1,
+      id: 'runtime-bad-version',
+      payload_version: '9.9',
+      widget_type: 'workorder_summary',
+      title: 'Bad version',
+      payload: { items: [{ label: 'Bad', value: 1 }] },
     },
   ],
 };

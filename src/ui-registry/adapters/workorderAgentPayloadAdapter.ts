@@ -23,7 +23,7 @@ import {
   maintenanceWorkordersSurfaceId,
   maintenanceWorkordersSurface,
 } from '../surfaces/maintenanceWorkordersSurface';
-import { isSupportedWidgetType, validateWidget } from '../validation';
+import { validateWidget } from '../validation';
 
 type WorkorderAgentPayloadRecord = Record<string, unknown>;
 
@@ -90,8 +90,10 @@ export interface NormalizedWorkorderAgentPayload {
 }
 
 type WorkorderTableRow = Record<string, string | number | boolean | null>;
+type RuntimeWidgetType = 'workorder_summary' | 'workorder_table' | 'workorder_list' | 'workorder_status_insight';
 
 const regionIds = new Set<string>(maintenanceWorkordersRegionIds);
+const supportedRuntimeWidgetPayloadVersion = '1.0';
 
 const kpiSummaryRegion = 'maintenance.workorders.kpi.summary';
 const tableRegion = 'maintenance.workorders.table';
@@ -403,27 +405,47 @@ function normalizeRuntimeWidgets(value: unknown): {
 
   normalizeRecordArray(value).forEach((record, index) => {
     const widgetIdValue = getText(record.id) ?? `widgets[${index}]`;
-    const widgetType = getText(record.type);
+    const widgetType = getText(record.widget_type);
+    const payloadVersion = getText(record.payload_version);
+    const payload = getRecord(record.payload);
 
-    if (!widgetType || !isSupportedWidgetType(widgetType)) {
+    if (!widgetType || !isRuntimeWidgetType(widgetType)) {
       rejectedWidgets.push({
         widgetId: widgetIdValue,
         widgetType,
-        reason: `Runtime widget '${widgetIdValue}' uses unsupported type '${widgetType ?? 'unknown'}'`,
+        reason: `Runtime widget '${widgetIdValue}' uses unsupported widget_type '${widgetType ?? 'unknown'}'`,
       });
       return;
     }
 
-    if (widgetType === 'action_list_readonly') {
+    if (payloadVersion !== supportedRuntimeWidgetPayloadVersion) {
       rejectedWidgets.push({
         widgetId: widgetIdValue,
         widgetType,
-        reason: `Runtime widget '${widgetIdValue}' must provide actions through readonly_actions`,
+        reason: `Runtime widget '${widgetIdValue}' uses unsupported payload_version '${payloadVersion ?? 'missing'}'`,
       });
       return;
     }
 
-    const candidate = record as Partial<UiWidget> as UiWidget;
+    if (!payload) {
+      rejectedWidgets.push({
+        widgetId: widgetIdValue,
+        widgetType,
+        reason: `Runtime widget '${widgetIdValue}' is missing object payload`,
+      });
+      return;
+    }
+
+    const candidate = mapRuntimeWidgetContract(record, widgetType, payload, widgetIdValue);
+    if (!candidate) {
+      rejectedWidgets.push({
+        widgetId: widgetIdValue,
+        widgetType,
+        reason: `Runtime widget '${widgetIdValue}' payload did not match ${widgetType} schema`,
+      });
+      return;
+    }
+
     const validation = validateWidget(candidate, maintenanceWorkordersSurface);
     if (!validation.valid) {
       rejectedWidgets.push({
@@ -447,6 +469,140 @@ function normalizeRuntimeWidgets(value: unknown): {
   });
 
   return { widgets, rejectedWidgets };
+}
+
+function mapRuntimeWidgetContract(
+  record: WorkorderAgentPayloadRecord,
+  widgetType: RuntimeWidgetType,
+  payload: WorkorderAgentPayloadRecord,
+  widgetIdValue: string,
+): UiWidget | null {
+  const base = {
+    id: safeId(widgetIdValue, `runtime-${widgetType}`),
+    title: getText(record.title ?? payload.title),
+    description: getText(record.summary ?? payload.summary ?? payload.description),
+    metadata: compactRecord({
+      runtimeWidgetType: widgetType,
+      runtimePayloadVersion: getText(record.payload_version),
+      diagnostics: getRecord(record.diagnostics),
+      traceMetadata: getRecord(record.trace_metadata ?? record.trace),
+    }),
+  };
+
+  switch (widgetType) {
+    case 'workorder_summary': {
+      const summary = getText(payload.headline ?? payload.summary ?? payload.description ?? record.summary);
+      const items = normalizeRuntimeSummaryItems(payload.items ?? payload.metrics);
+      if (!base.title && !summary && items.length === 0) {
+        return null;
+      }
+      return {
+        ...base,
+        type: 'summary_card',
+        regionId: kpiSummaryRegion,
+        title: base.title ?? 'Workorder summary',
+        summary,
+        items,
+      };
+    }
+    case 'workorder_table':
+    case 'workorder_list': {
+      const rows = normalizeWorkorderRows(payload.rows ?? payload.workorders ?? payload.items);
+      if (rows.length === 0) {
+        return null;
+      }
+      return {
+        ...base,
+        type: 'data_table',
+        regionId: tableRegion,
+        title: base.title ?? (widgetType === 'workorder_list' ? 'Workorder list' : 'Workorders'),
+        columns: inferWorkorderColumns(rows),
+        rows,
+      };
+    }
+    case 'workorder_status_insight': {
+      const insights = normalizeRecordArray(payload.insights ?? payload.items).map((item, index) => {
+        const id = getText(item.id) ?? `status-insight-${index + 1}`;
+        const title = getText(item.title);
+        const summary = getText(item.summary ?? item.description ?? item.rationale);
+        if (!title || !summary) {
+          return null;
+        }
+        return {
+          id: safeId(id, 'status-insight'),
+          title,
+          summary,
+          severity: getText(item.severity ?? item.priority),
+          metadata: compactRecord({
+            status: getText(item.status),
+            workorderNo: getText(item.workorder_no ?? item.workorder_id),
+            equipmentNo: getText(item.equipment_no ?? item.machine_id),
+          }),
+        };
+      }).filter((item): item is NonNullable<NonNullable<Extract<UiWidget, { type: 'insight_list' }>['insights']>[number]> => item !== null);
+
+      if (insights.length === 0) {
+        const title = getText(payload.title);
+        const summary = getText(payload.summary ?? payload.description ?? payload.rationale);
+        if (!title || !summary) {
+          return null;
+        }
+        insights.push({
+          id: safeId(widgetIdValue, 'status-insight'),
+          title,
+          summary,
+          severity: getText(payload.severity ?? payload.priority),
+        });
+      }
+
+      return {
+        ...base,
+        type: 'insight_list',
+        regionId: insightsRegion,
+        title: base.title ?? 'Workorder status insight',
+        insights,
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+function isRuntimeWidgetType(value: string): value is RuntimeWidgetType {
+  return value === 'workorder_summary'
+    || value === 'workorder_table'
+    || value === 'workorder_list'
+    || value === 'workorder_status_insight';
+}
+
+function normalizeRuntimeSummaryItems(value: unknown): NonNullable<Extract<UiWidget, { type: 'summary_card' }>['items']> {
+  const fromArray = normalizeRecordArray(value).map((record) => {
+    const label = getText(record.label ?? record.name);
+    const itemValue = getSummaryItemValue(record.value ?? record.count ?? record.total);
+    if (!label || itemValue === undefined) {
+      return null;
+    }
+    return { label, value: itemValue };
+  }).filter((item): item is { label: string; value: string | number | null } => item !== null);
+
+  if (fromArray.length > 0) {
+    return fromArray;
+  }
+
+  const record = getRecord(value);
+  if (!record) {
+    return [];
+  }
+
+  return Object.entries(record).map(([key, itemValue]) => {
+    const scalar = getSummaryItemValue(itemValue);
+    return scalar === undefined ? null : { label: labelFromField(key), value: scalar };
+  }).filter((item): item is { label: string; value: string | number | null } => item !== null);
+}
+
+function getSummaryItemValue(value: unknown): string | number | null | undefined {
+  const scalar = getScalar(value);
+  return typeof scalar === 'boolean' ? undefined : scalar;
 }
 
 function getRuntimeWidgets(normalized: NormalizedWorkorderAgentPayload): UiWidget[] {
