@@ -19,8 +19,30 @@ const HOLD_FILTERS = {
 };
 
 const REPEAT_FILTERS = {
-  equipment_no: { column: 'equipment_no' },
+  equipment_no: { column: 'candidate.equipment_no' },
+  failure_signal: { column: 'candidate.failure_signal' },
 };
+
+const FAILURE_FILTERS = {
+  site: { column: 'site' },
+  location: { column: 'location' },
+  department: { column: 'department' },
+  equipment_no: { column: 'equipment_no' },
+  equipment_type: { column: 'equipment_type' },
+  job_type: { column: 'job_type' },
+  failure_signal: { column: 'failure_signal' },
+};
+
+const FAILURE_GROUP_BY_COLUMNS = new Set([
+  'failure_signal',
+  'equipment_no',
+  'equipment_type',
+  'department',
+  'site',
+  'job_type',
+]);
+
+const PARETO_BASIS = new Set(['count', 'downtime', 'repair_time']);
 
 export function createMaintenanceAnalyticsRepository(db) {
   return {
@@ -62,6 +84,20 @@ export function createMaintenanceAnalyticsRepository(db) {
     buildRepeatFailuresQuery,
     async listRepeatFailures(filters = {}) {
       const query = buildRepeatFailuresQuery(filters);
+      const result = await db.query(query.text, query.values);
+      return listResult(result.rows, query.limit, query.offset);
+    },
+
+    buildFailureFrequencyQuery,
+    async listFailureFrequency(filters = {}) {
+      const query = buildFailureFrequencyQuery(filters);
+      const result = await db.query(query.text, query.values);
+      return listResult(result.rows, query.limit, query.offset);
+    },
+
+    buildFailureParetoQuery,
+    async listFailurePareto(filters = {}) {
+      const query = buildFailureParetoQuery(filters);
       const result = await db.query(query.text, query.values);
       return listResult(result.rows, query.limit, query.offset);
     },
@@ -261,20 +297,198 @@ export function buildRepeatFailuresQuery(filters = {}) {
   const { limit, offset } = parsePagination(filters);
   const { whereSql, values } = buildWhereClause(filters, REPEAT_FILTERS);
   const predicates = whereSql ? [whereSql.replace(/^WHERE /, '')] : [];
-  addDateWindow(predicates, values, 'last_seen_at', filters.from, filters.to);
+  addDateWindow(predicates, values, 'candidate.last_seen_at', filters.from, filters.to);
   const finalWhere = predicates.length ? `WHERE ${predicates.join(' AND ')}` : '';
   values.push(limit, offset);
 
   return {
-    text: `SELECT *, count(*) OVER() AS __total
-           FROM maintenance.v_repeat_failure_candidates
-           ${finalWhere}
+    text: `WITH enriched AS (
+             SELECT
+               candidate.equipment_no,
+               max(tracking.equipment_desc) AS equipment_desc,
+               candidate.failure_signal,
+               candidate.workorder_count,
+               coalesce(sum(tracking.down_time_hours), 0) AS total_downtime_hours,
+               avg(tracking.total_repair_time_hours) FILTER (WHERE tracking.total_repair_time_hours IS NOT NULL) AS avg_repair_time_hours,
+               candidate.first_seen_at,
+               candidate.last_seen_at,
+               candidate.workorders
+             FROM maintenance.v_repeat_failure_candidates candidate
+             LEFT JOIN maintenance.work_order tracking
+               ON tracking.equipment_no = candidate.equipment_no
+              AND coalesce(tracking.failure_description, tracking.reason, tracking.description) = candidate.failure_signal
+             ${finalWhere}
+             GROUP BY
+               candidate.equipment_no,
+               candidate.failure_signal,
+               candidate.workorder_count,
+               candidate.first_seen_at,
+               candidate.last_seen_at,
+               candidate.workorders
+           )
+           SELECT *, count(*) OVER() AS __total
+           FROM enriched
            ORDER BY workorder_count DESC, last_seen_at DESC NULLS LAST
            LIMIT $${values.length - 1} OFFSET $${values.length}`,
     values,
     limit,
     offset,
   };
+}
+
+export function buildFailureFrequencyQuery(filters = {}) {
+  const { limit, offset } = parsePagination(filters);
+  const groupBy = normalizeFailureGroupBy(filters.group_by);
+  const { whereSql, values } = buildWhereClause(filters, FAILURE_FILTERS);
+  const predicates = whereSql ? [whereSql.replace(/^WHERE /, '')] : [];
+  addDateWindow(predicates, values, 'failure_at', filters.from, filters.to);
+  const finalWhere = predicates.length ? `WHERE ${predicates.join(' AND ')}` : '';
+  values.push(limit, offset);
+
+  return {
+    text: `WITH failure_base AS (
+             SELECT
+               coalesce(failure_description, reason, action_description, 'Unspecified failure') AS failure_signal,
+               equipment_no,
+               equipment_desc,
+               site,
+               location,
+               department,
+               equipment_type,
+               job_type,
+               workorder_no,
+               coalesce(act_work_start, plan_start) AS failure_at,
+               down_time_hours,
+               total_repair_time_hours
+             FROM maintenance.work_order
+             WHERE coalesce(failure_description, reason, action_description) IS NOT NULL
+           ),
+           frequency AS (
+             SELECT
+               ${groupBy} AS failure_signal,
+               count(*)::int AS failure_count,
+               count(DISTINCT equipment_no)::int AS affected_equipment_count,
+               count(DISTINCT workorder_no)::int AS workorder_count,
+               coalesce(sum(down_time_hours), 0) AS total_downtime_hours,
+               avg(total_repair_time_hours) FILTER (WHERE total_repair_time_hours IS NOT NULL) AS avg_repair_time_hours,
+               min(failure_at) AS first_seen_at,
+               max(failure_at) AS last_seen_at
+             FROM failure_base
+             ${finalWhere}
+             GROUP BY ${groupBy}
+           )
+           SELECT *, count(*) OVER() AS __total
+           FROM frequency
+           ORDER BY failure_count DESC, total_downtime_hours DESC, failure_signal
+           LIMIT $${values.length - 1} OFFSET $${values.length}`,
+    values,
+    limit,
+    offset,
+    groupBy,
+  };
+}
+
+export function buildFailureParetoQuery(filters = {}) {
+  const topN = parseTopN(filters.top_n);
+  const basis = parseParetoBasis(filters.basis);
+  const groupBy = normalizeFailureGroupBy(filters.group_by);
+  const { whereSql, values } = buildWhereClause(filters, FAILURE_FILTERS);
+  const predicates = whereSql ? [whereSql.replace(/^WHERE /, '')] : [];
+  addDateWindow(predicates, values, 'failure_at', filters.from, filters.to);
+  const finalWhere = predicates.length ? `WHERE ${predicates.join(' AND ')}` : '';
+  const valueExpression = paretoValueExpression(basis);
+  const basisPlaceholder = values.length + 1;
+  const limitPlaceholder = values.length + 2;
+
+  return {
+    text: `WITH failure_base AS (
+             SELECT
+               coalesce(failure_description, reason, action_description, 'Unspecified failure') AS failure_signal,
+               equipment_no,
+               equipment_desc,
+               site,
+               location,
+               department,
+               equipment_type,
+               job_type,
+               workorder_no,
+               coalesce(act_work_start, plan_start) AS failure_at,
+               down_time_hours,
+               total_repair_time_hours
+             FROM maintenance.work_order
+             WHERE coalesce(failure_description, reason, action_description) IS NOT NULL
+           ),
+           frequency AS (
+             SELECT
+               ${groupBy} AS failure_signal,
+               count(*)::int AS failure_count,
+               count(DISTINCT equipment_no)::int AS affected_equipment_count,
+               count(DISTINCT workorder_no)::int AS workorder_count,
+               coalesce(sum(down_time_hours), 0) AS total_downtime_hours,
+               coalesce(sum(total_repair_time_hours), 0) AS total_repair_time_hours,
+               min(failure_at) AS first_seen_at,
+               max(failure_at) AS last_seen_at
+             FROM failure_base
+             ${finalWhere}
+             GROUP BY ${groupBy}
+           ),
+           ranked AS (
+             SELECT
+               row_number() OVER (ORDER BY ${valueExpression} DESC, failure_signal)::int AS rank,
+               failure_signal,
+               ${valueExpression} AS value,
+               $${basisPlaceholder}::text AS basis,
+               workorder_count,
+               affected_equipment_count,
+               sum(${valueExpression}) OVER () AS total_value
+             FROM frequency
+           )
+           SELECT
+             rank,
+             failure_signal,
+             value,
+             basis,
+             CASE WHEN total_value > 0 THEN (value / total_value) * 100 ELSE 0 END AS percentage,
+             CASE WHEN total_value > 0 THEN (sum(value) OVER (ORDER BY rank) / total_value) * 100 ELSE 0 END AS cumulative_percentage,
+             workorder_count,
+             affected_equipment_count,
+             count(*) OVER() AS __total
+           FROM ranked
+           ORDER BY rank
+           LIMIT $${limitPlaceholder} OFFSET 0`,
+    values: [...values, basis, topN],
+    limit: topN,
+    offset: 0,
+    basis,
+  };
+}
+
+function normalizeFailureGroupBy(value) {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return FAILURE_GROUP_BY_COLUMNS.has(normalized) ? normalized : 'failure_signal';
+}
+
+function parseParetoBasis(value) {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return PARETO_BASIS.has(normalized) ? normalized : 'count';
+}
+
+function parseTopN(value) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return 10;
+  }
+  return Math.min(parsed, 500);
+}
+
+function paretoValueExpression(basis) {
+  if (basis === 'downtime') {
+    return 'total_downtime_hours';
+  }
+  if (basis === 'repair_time') {
+    return 'total_repair_time_hours';
+  }
+  return 'failure_count';
 }
 
 function buildDashboardWorkorderSql(filters = {}) {

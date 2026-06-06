@@ -1,4 +1,4 @@
-import { dashboardSummaryDto, holdHistoryDto, maintenanceReliabilityDto, mtbfMttrDto, riskMachineDto } from '../dto/maintenanceDto.mjs';
+import { dashboardSummaryDto, failureFrequencyDto, failureParetoDto, holdHistoryDto, maintenanceReliabilityDto, mtbfMttrDto, riskMachineDto } from '../dto/maintenanceDto.mjs';
 
 export function createMaintenanceAnalyticsService(analyticsRepository, inventoryRepository) {
   return {
@@ -30,6 +30,16 @@ export function createMaintenanceAnalyticsService(analyticsRepository, inventory
     async listRepeatFailures(filters) {
       const result = await analyticsRepository.listRepeatFailures(filters);
       return { ...result, data: result.rows.map(riskMachineDto) };
+    },
+
+    async listFailureFrequency(filters) {
+      const result = await analyticsRepository.listFailureFrequency(filters);
+      return { ...result, data: result.rows.map(failureFrequencyDto) };
+    },
+
+    async listFailurePareto(filters) {
+      const result = await analyticsRepository.listFailurePareto(filters);
+      return { ...result, data: result.rows.map(failureParetoDto) };
     },
 
     async listStockRisk(filters) {

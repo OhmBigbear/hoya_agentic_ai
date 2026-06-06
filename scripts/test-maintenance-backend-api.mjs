@@ -10,14 +10,17 @@ import { createCorsHandler, getAllowedCorsOrigins } from '../src/server/cors.mjs
 import { assertDatabaseUrl, MissingDatabaseUrlError } from '../src/server/db/postgres.mjs';
 import {
   buildHoldReasonsQuery,
+  buildFailureFrequencyQuery,
+  buildFailureParetoQuery,
   buildMachineHealthQuery,
   buildMtbfMttrQuery,
   buildReliabilityMtbfQuery,
   buildReliabilityMttrQuery,
+  buildRepeatFailuresQuery,
 } from '../src/server/maintenance/repositories/maintenanceAnalyticsRepository.mjs';
 import { buildStockRiskQuery } from '../src/server/maintenance/repositories/maintenanceInventoryRepository.mjs';
 import { buildWorkordersQuery } from '../src/server/maintenance/repositories/maintenanceWorkorderRepository.mjs';
-import { createMaintenanceRouter } from '../src/server/maintenance/routes/maintenanceRoutes.mjs';
+import { createMaintenanceRouter, matchRoute } from '../src/server/maintenance/routes/maintenanceRoutes.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -78,6 +81,53 @@ function testQueryBuilders() {
   const stock = buildStockRiskQuery({ catalogue_no: 'BRG-01', stock_risk: 'zero_stock' });
   assert.match(stock.text, /maintenance\.v_stock_risk_summary/);
   assert.deepEqual(stock.values.slice(0, 2), ['BRG-01', 'zero_stock']);
+
+  const frequency = buildFailureFrequencyQuery({
+    site: "HOYA-BKK' OR 1=1 --",
+    equipment_type: 'GRINDER',
+    failure_signal: 'Bearing noise',
+    group_by: 'equipment_type; DROP TABLE maintenance.work_order;',
+    from: '2026-01-01',
+    to: '2026-02-01',
+    limit: 9999,
+    offset: 4,
+  });
+  assert.match(frequency.text, /maintenance\.work_order/);
+  assert.doesNotMatch(frequency.text, /DROP TABLE|OR 1=1/);
+  assert.match(frequency.text, /failure_signal AS failure_signal/);
+  assert.match(frequency.text, /ORDER BY failure_count DESC, total_downtime_hours DESC, failure_signal/);
+  assert.deepEqual(frequency.values, ["HOYA-BKK' OR 1=1 --", 'GRINDER', 'Bearing noise', '2026-01-01', '2026-02-01', 500, 4]);
+  assert.equal(frequency.limit, 500);
+  assert.equal(frequency.offset, 4);
+
+  const frequencyByDepartment = buildFailureFrequencyQuery({ group_by: 'department', limit: 3 });
+  assert.match(frequencyByDepartment.text, /department AS failure_signal/);
+  assert.deepEqual(frequencyByDepartment.values, [3, 0]);
+
+  const pareto = buildFailureParetoQuery({
+    department: 'ENG',
+    basis: 'downtime',
+    top_n: 9999,
+    from: '2026-01-01',
+    to: '2026-02-01',
+  });
+  assert.match(pareto.text, /maintenance\.work_order/);
+  assert.doesNotMatch(pareto.text, /maintenance\.stg_/i);
+  assert.match(pareto.text, /row_number\(\) OVER \(ORDER BY total_downtime_hours DESC, failure_signal\)::int AS rank/);
+  assert.match(pareto.text, /sum\(value\) OVER \(ORDER BY rank\) \/ total_value/);
+  assert.deepEqual(pareto.values, ['ENG', '2026-01-01', '2026-02-01', 'downtime', 500]);
+  assert.equal(pareto.limit, 500);
+  assert.equal(pareto.offset, 0);
+
+  const defaultPareto = buildFailureParetoQuery({ basis: 'bad-basis', top_n: '-5' });
+  assert.deepEqual(defaultPareto.values, ['count', 10]);
+  assert.equal(defaultPareto.limit, 10);
+
+  const repeats = buildRepeatFailuresQuery({ equipment_no: 'MC-01', failure_signal: 'Bearing noise', from: '2026-01-01', to: '2026-02-01' });
+  assert.match(repeats.text, /maintenance\.v_repeat_failure_candidates candidate/);
+  assert.match(repeats.text, /LEFT JOIN maintenance\.work_order tracking/);
+  assert.doesNotMatch(repeats.text, /maintenance\.stg_/i);
+  assert.deepEqual(repeats.values.slice(0, 4), ['MC-01', 'Bearing noise', '2026-01-01', '2026-02-01']);
 }
 
 async function testRoutes() {
@@ -126,7 +176,54 @@ async function testRoutes() {
         return { data: [{ hold_reason_description: 'Waiting part', hold_count: 2 }], total: 1, limit: 50, offset: 0 };
       },
       async listRepeatFailures() {
-        return { data: [{ equipment_no: 'MC-01', workorder_count: 2 }], total: 1, limit: 50, offset: 0 };
+        return {
+          data: [{
+            equipment_no: 'MC-01',
+            equipment_desc: 'Generator 1',
+            failure_signal: 'Bearing noise',
+            workorder_count: 2,
+            total_downtime_hours: 4,
+            avg_repair_time_hours: 1.5,
+            workorders: ['WO-1001', 'WO-0999'],
+          }],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        };
+      },
+      async listFailureFrequency(filters) {
+        calls.push(['listFailureFrequency', filters]);
+        return {
+          data: [{
+            failure_signal: 'Bearing noise',
+            failure_count: 3,
+            affected_equipment_count: 2,
+            workorder_count: 3,
+            total_downtime_hours: 8,
+            avg_repair_time_hours: 1.5,
+          }],
+          total: 1,
+          limit: 10,
+          offset: 0,
+        };
+      },
+      async listFailurePareto(filters) {
+        calls.push(['listFailurePareto', filters]);
+        return {
+          data: [{
+            rank: 1,
+            failure_signal: 'Bearing noise',
+            value: 8,
+            basis: 'downtime',
+            percentage: 80,
+            cumulative_percentage: 80,
+            workorder_count: 3,
+            affected_equipment_count: 2,
+          }],
+          total: 1,
+          limit: 5,
+          offset: 0,
+        };
       },
       async listStockRisk() {
         return { data: [{ catalogue_no: 'BRG-01', stock_risk: 'zero_stock' }], total: 1, limit: 50, offset: 0 };
@@ -177,6 +274,30 @@ async function testRoutes() {
   assert.equal(sourceViewAlias.statusCode, 200);
   assert.deepEqual(calls.at(-1), ['listMachineHealth', { limit: '1' }]);
 
+  assert.deepEqual(matchRoute('/api/maintenance/analytics/failure-frequency'), { name: 'failureFrequency', params: {} });
+  assert.deepEqual(matchRoute('/api/maintenance/analytics/failure-pareto'), { name: 'failurePareto', params: {} });
+
+  const frequencyEndpoint = await invoke(router, '/api/maintenance/analytics/failure-frequency?site=HOYA-BKK&group_by=failure_signal&limit=10');
+  assert.equal(frequencyEndpoint.statusCode, 200);
+  assert.equal(frequencyEndpoint.body.data[0].failure_signal, 'Bearing noise');
+  assert.equal(frequencyEndpoint.body.data[0].failure_count, 3);
+  assert.equal(frequencyEndpoint.body.limit, 10);
+  assert.deepEqual(calls.at(-1), ['listFailureFrequency', { site: 'HOYA-BKK', group_by: 'failure_signal', limit: '10' }]);
+
+  const paretoEndpoint = await invoke(router, '/api/maintenance/analytics/failure-pareto?basis=downtime&top_n=5');
+  assert.equal(paretoEndpoint.statusCode, 200);
+  assert.equal(paretoEndpoint.body.data[0].rank, 1);
+  assert.equal(paretoEndpoint.body.data[0].cumulative_percentage, 80);
+  assert.deepEqual(calls.at(-1), ['listFailurePareto', { basis: 'downtime', top_n: '5' }]);
+
+  const repeatEndpoint = await invoke(router, '/api/maintenance/analytics/repeat-failures?equipment_no=MC-01');
+  assert.equal(repeatEndpoint.statusCode, 200);
+  assert.equal(repeatEndpoint.body.data[0].equipment_no, 'MC-01');
+  assert.equal(repeatEndpoint.body.data[0].failure_signal, 'Bearing noise');
+  assert.equal(repeatEndpoint.body.data[0].workorder_count, 2);
+  assert.equal(repeatEndpoint.body.data[0].total_downtime_hours, 4);
+  assert.deepEqual(repeatEndpoint.body.data[0].workorders, ['WO-1001', 'WO-0999']);
+
   const failureRouter = createMaintenanceRouter({
     workorderService: {
       async listWorkorders() {
@@ -188,6 +309,18 @@ async function testRoutes() {
   const failure = await invoke(failureRouter, '/api/maintenance/workorders');
   assert.equal(failure.statusCode, 503);
   assert.equal(failure.body.error.code, 'DATABASE_SCHEMA_UNAVAILABLE');
+
+  const timeoutRouter = createMaintenanceRouter({
+    workorderService: {},
+    analyticsService: {
+      async listFailureFrequency() {
+        throw Object.assign(new Error('statement timeout'), { code: '57014' });
+      },
+    },
+  });
+  const timeout = await invoke(timeoutRouter, '/api/maintenance/analytics/failure-frequency');
+  assert.equal(timeout.statusCode, 504);
+  assert.equal(timeout.body.error.code, 'DATABASE_TIMEOUT');
 }
 
 async function testCors() {

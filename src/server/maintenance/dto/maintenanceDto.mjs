@@ -143,6 +143,8 @@ export function riskMachineDto(row) {
     equipment_desc: stringOrUndefined(row.equipment_desc),
     failure_signal: stringOrUndefined(row.failure_signal),
     workorder_count: numberOrUndefined(row.workorder_count),
+    total_downtime_hours: numberOrUndefined(row.total_downtime_hours),
+    avg_repair_time_hours: numberOrUndefined(row.avg_repair_time_hours),
     first_seen_at: dateString(row.first_seen_at),
     last_seen_at: dateString(row.last_seen_at),
     workorders: toStringArray(row.workorders),
@@ -155,6 +157,32 @@ export function riskMachineDto(row) {
     min_qty: numberOrUndefined(row.min_qty),
     stock_value: numberOrUndefined(row.stock_value),
     stock_risk: stringOrUndefined(row.stock_risk),
+  };
+}
+
+export function failureFrequencyDto(row) {
+  return {
+    failure_signal: String(row.failure_signal ?? ''),
+    failure_count: numberOrZero(row.failure_count),
+    affected_equipment_count: numberOrZero(row.affected_equipment_count),
+    workorder_count: numberOrZero(row.workorder_count),
+    total_downtime_hours: numberOrZero(row.total_downtime_hours),
+    avg_repair_time_hours: numberOrUndefined(row.avg_repair_time_hours),
+    first_seen_at: dateString(row.first_seen_at),
+    last_seen_at: dateString(row.last_seen_at),
+  };
+}
+
+export function failureParetoDto(row) {
+  return {
+    rank: numberOrZero(row.rank),
+    failure_signal: String(row.failure_signal ?? ''),
+    value: numberOrZero(row.value),
+    basis: stringOrUndefined(row.basis) ?? 'count',
+    percentage: numberOrZero(row.percentage),
+    cumulative_percentage: numberOrZero(row.cumulative_percentage),
+    workorder_count: numberOrZero(row.workorder_count),
+    affected_equipment_count: numberOrZero(row.affected_equipment_count),
   };
 }
 

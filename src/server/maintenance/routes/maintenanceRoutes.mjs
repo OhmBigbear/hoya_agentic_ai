@@ -74,6 +74,16 @@ export function createMaintenanceRouter({ workorderService, analyticsService }) 
         return sendEnvelope(response, result.data, result);
       }
 
+      if (match.name === 'failureFrequency') {
+        const result = await analyticsService.listFailureFrequency(query);
+        return sendEnvelope(response, result.data, result);
+      }
+
+      if (match.name === 'failurePareto') {
+        const result = await analyticsService.listFailurePareto(query);
+        return sendEnvelope(response, result.data, result);
+      }
+
       if (match.name === 'stockRisk') {
         const result = await analyticsService.listStockRisk(query);
         return sendEnvelope(response, result.data, result);
@@ -114,6 +124,12 @@ export function matchRoute(pathname) {
   if (pathname === '/api/maintenance/analytics/repeat-failures') {
     return { name: 'repeatFailures', params: {} };
   }
+  if (pathname === '/api/maintenance/analytics/failure-frequency') {
+    return { name: 'failureFrequency', params: {} };
+  }
+  if (pathname === '/api/maintenance/analytics/failure-pareto') {
+    return { name: 'failurePareto', params: {} };
+  }
   if (pathname === '/api/maintenance/analytics/stock-risk') {
     return { name: 'stockRisk', params: {} };
   }
@@ -146,6 +162,7 @@ function sendEnvelope(response, data, meta = {}) {
     limit: meta.limit,
     offset: meta.offset,
     generated_at: new Date().toISOString(),
+    warnings: meta.warnings,
   });
 }
 
