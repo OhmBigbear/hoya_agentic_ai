@@ -638,7 +638,7 @@ function normalizeTraceMetadata(
     ?? getRecord(root?.trace);
 
   const trace_id = getText(record.trace_id ?? root?.trace_id ?? traceRecord?.trace_id);
-  const agent_id = getText(record.agent_id ?? record.generated_by_agent_id ?? root?.agent_id ?? traceRecord?.agent_id);
+  const agent_id = getText(record.agent_id ?? record.generated_by_agent_id ?? root?.agent_id ?? root?.generated_by_agent_id ?? traceRecord?.agent_id);
   const run_id = getText(record.run_id ?? root?.run_id ?? traceRecord?.run_id);
   const payload_version = getText(record.payload_version ?? root?.payload_version ?? traceRecord?.payload_version);
   const metadata = compactRecord({ trace_id, agent_id, run_id, payload_version }) as WorkorderRuntimeTraceMetadata | undefined;

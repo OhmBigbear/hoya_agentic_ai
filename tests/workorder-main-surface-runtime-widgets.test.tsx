@@ -3,11 +3,17 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  buildApprovalReviewHref,
   buildWorkorderRuntimeWidgetWorkspaceState,
+  getWorkorderRcaApprovalMetadata,
+  RuntimeApprovalRequestButton,
   WorkorderRuntimeMainSurface,
   handleMainSurfaceReadonlyAction,
 } from '../src/pages/maintenance/MaintenanceWorkorderTrackingPage';
 import {
+  agenticCoreWorkspaceRuntimeResponse,
+  agenticCoreWorkspaceRuntimeResponseWithApproval,
+  approvalRuntimeWorkorderAgentResponse,
   runtimeWorkorderAgentResponse,
   unknownWidgetRuntimeWorkorderAgentResponse,
   unsafeRuntimeWorkorderAgentResponse,
@@ -103,6 +109,149 @@ describe('workorder runtime main surface widgets', () => {
     expect(markup).toContain('data-testid="workorder-runtime-readonly-recommendations"');
     expect(markup).toContain('data-testid="workorder-runtime-readonly-action-card"');
     expect(markup).toContain('Developer diagnostics');
+  });
+
+  it('renders Agentic Core workspace_payload responses without requiring cards or charts', () => {
+    const workspaceState = buildWorkorderRuntimeWidgetWorkspaceState({
+      payload: agenticCoreWorkspaceRuntimeResponse,
+      source: 'runtime',
+      runtimeTraceId: 'trace-agentic-core-workspace-022',
+      clientTraceId: 'client-trace-022-r5b',
+      payloadVersion: '1.0',
+    });
+    const markup = renderToStaticMarkup(<WorkorderRuntimeMainSurface workspaceState={workspaceState} />);
+
+    expect(workspaceState).toMatchObject({
+      status: 'ready',
+      payloadVersion: '1.0',
+      payloadType: 'workorder_insight',
+      intent: 'workorder_insight',
+      rejectedWidgetCount: 0,
+      diagnostics: {
+        validationStatus: 'valid',
+        traceId: 'trace-agentic-core-workspace-022',
+        agentId: 'workorder-agent',
+        clientTraceId: 'client-trace-022-r5b',
+        payloadVersion: '1.0',
+      },
+    });
+    expect(markup).toContain('data-testid="workorder-runtime-main-widgets"');
+    expect(markup).toContain('Runtime workorder operating picture');
+    expect(markup).toContain('Review POLISHING-7A corrective queue');
+    expect(markup).toContain('Inspect the open corrective queue before any CMMS write-back.');
+    expect(markup).toContain('Agentic Core workorder query');
+    expect(markup).toContain('Developer diagnostics');
+    expect(markup).not.toContain('Runtime payload needs review');
+    expect(markup).not.toContain('Runtime response did not match the Workorder Agent payload envelope');
+    expect(markup).not.toContain('Runtime widgets are unavailable');
+  });
+
+  it('renders returned RCA approval metadata with the safety boundary and Approval Inbox route', () => {
+    const markup = renderToStaticMarkup(
+      <WorkorderRuntimeMainSurface
+        runtimeStatus={{
+          status: 'success',
+          source: 'runtime',
+          payload: approvalRuntimeWorkorderAgentResponse,
+        }}
+      />,
+    );
+
+    expect(markup).toContain('data-testid="workorder-runtime-approval-panel"');
+    expect(markup).toContain('Approval Required');
+    expect(markup).toContain('Approval Type: Maintenance RCA');
+    expect(markup).toContain('task-rca-100');
+    expect(markup).toContain('approval-rca-100');
+    expect(markup).toContain('pending');
+    expect(markup).toContain('Human review required before promoting RCA advisory output.');
+    expect(markup).toContain('href="http://localhost:8100/approval-inbox?task_id=task-rca-100"');
+    expect(markup).toContain('Open Approval Inbox');
+    expect(markup).toContain('data-testid="workorder-runtime-approval-safety-boundary"');
+    expect(markup).toContain('Advisory only');
+    expect(markup).toContain('No final RCA');
+    expect(markup).toContain('No corrective action execution');
+    expect(markup).toContain('No preventive action execution');
+    expect(markup).toContain('No CMMS write-back');
+    expect(markup).toContain('No workorder creation');
+    expect(markup).not.toContain('&gt;Approve&lt;');
+    expect(markup).not.toContain('&gt;Reject&lt;');
+    expect(markup).not.toContain('/approve');
+    expect(markup).not.toContain('/reject');
+  });
+
+  it('resolves relative approval review routes against Agentic Core without creating decision links', () => {
+    expect(buildApprovalReviewHref('/approval-inbox?task_id=task-1', 'https://agentic-core.example.com')).toBe(
+      'https://agentic-core.example.com/approval-inbox?task_id=task-1',
+    );
+    expect(buildApprovalReviewHref('https://control.example.com/approval-inbox?task_id=task-1', 'https://ignored.example.com')).toBe(
+      'https://control.example.com/approval-inbox?task_id=task-1',
+    );
+    expect(buildApprovalReviewHref(undefined, 'https://agentic-core.example.com')).toBeNull();
+  });
+
+  it('invokes the explicit approval request action separately from normal runtime refresh', () => {
+    const onRuntimeFetch = vi.fn(async () => {});
+    const onApprovalRequest = vi.fn(async () => {});
+    const element = RuntimeApprovalRequestButton({ isLoading: false, onApprovalRequest });
+    const markup = renderToStaticMarkup(
+      <WorkorderRuntimeMainSurface
+        runtimeStatus={{
+          status: 'success',
+          source: 'runtime',
+          payload: runtimeWorkorderAgentResponse,
+        }}
+        onRuntimeFetch={onRuntimeFetch}
+        onApprovalRequest={onApprovalRequest}
+      />,
+    );
+    const approvalButton = findElement(element, (candidate) => elementText(candidate).includes('Request Human Approval'));
+
+    expect(markup).toContain('Request Human Approval');
+    expect(markup).toContain('Refresh runtime');
+    expect(approvalButton?.props?.onClick).toBeTypeOf('function');
+    approvalButton?.props?.onClick();
+    expect(onApprovalRequest).toHaveBeenCalledTimes(1);
+    expect(onRuntimeFetch).not.toHaveBeenCalled();
+  });
+
+  it('normalizes optional approval metadata from runtime payloads', () => {
+    expect(getWorkorderRcaApprovalMetadata(approvalRuntimeWorkorderAgentResponse)).toEqual({
+      approvalRequired: true,
+      approvalType: 'maintenance_rca',
+      approvalId: 'approval-rca-100',
+      taskId: 'task-rca-100',
+      status: 'pending',
+      reason: 'Human review required before promoting RCA advisory output.',
+      reviewRoute: '/approval-inbox?task_id=task-rca-100',
+    });
+    expect(getWorkorderRcaApprovalMetadata(runtimeWorkorderAgentResponse)).toBeNull();
+  });
+
+  it('preserves approval metadata on Agentic Core workspace_payload responses', () => {
+    const markup = renderToStaticMarkup(
+      <WorkorderRuntimeMainSurface
+        runtimeStatus={{
+          status: 'success',
+          source: 'runtime',
+          payload: agenticCoreWorkspaceRuntimeResponseWithApproval,
+        }}
+      />,
+    );
+
+    expect(getWorkorderRcaApprovalMetadata(agenticCoreWorkspaceRuntimeResponseWithApproval)).toMatchObject({
+      approvalRequired: true,
+      approvalType: 'maintenance_rca',
+      approvalId: 'approval-agentic-core-022',
+      taskId: 'task-agentic-core-022',
+      reviewRoute: '/approval-inbox?task_id=task-agentic-core-022',
+    });
+    expect(markup).toContain('data-testid="workorder-runtime-approval-panel"');
+    expect(markup).toContain('task-agentic-core-022');
+    expect(markup).toContain('Open Approval Inbox');
+    expect(markup).not.toContain('&gt;Approve&lt;');
+    expect(markup).not.toContain('&gt;Reject&lt;');
+    expect(markup).not.toContain('/approve');
+    expect(markup).not.toContain('/reject');
   });
 
   it('does not make the Copilot diagnostics preview the only runtime widget renderer', () => {
@@ -265,3 +414,36 @@ describe('workorder runtime main surface widgets', () => {
     expect(markup).not.toContain('data-testid="workorder-runtime-main-widgets"');
   });
 });
+
+function findElement(
+  node: unknown,
+  predicate: (element: React.ReactElement) => boolean,
+): React.ReactElement | null {
+  if (!React.isValidElement(node)) {
+    return null;
+  }
+
+  if (predicate(node)) {
+    return node;
+  }
+
+  const children = React.Children.toArray(node.props.children);
+  for (const child of children) {
+    const found = findElement(child, predicate);
+    if (found) {
+      return found;
+    }
+  }
+
+  return null;
+}
+
+function elementText(node: unknown): string {
+  if (typeof node === 'string' || typeof node === 'number') {
+    return String(node);
+  }
+  if (!React.isValidElement(node)) {
+    return '';
+  }
+  return React.Children.toArray(node.props.children).map(elementText).join(' ');
+}

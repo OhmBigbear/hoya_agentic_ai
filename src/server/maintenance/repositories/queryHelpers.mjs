@@ -8,6 +8,10 @@ export function parsePagination(query = {}) {
   };
 }
 
+export function parseBoundedLimit(value, fallback, max) {
+  return clampInteger(value, fallback, 1, max);
+}
+
 export function buildWhereClause(filters, filterMap) {
   const values = [];
   const predicates = [];

@@ -9,10 +9,15 @@ export interface WorkorderRuntimeRequestInput {
   selected_workorder_id?: string;
   selected_machine_id?: string;
   machine_id?: string;
-  context?: Record<string, unknown>;
+  context?: WorkorderRuntimeRequestContext;
   context_metadata?: Record<string, unknown>;
   client_trace_id?: string;
   payload_version?: string;
+}
+
+export interface WorkorderRuntimeRequestContext extends Record<string, unknown> {
+  create_approval_request?: boolean;
+  require_human_approval?: boolean;
 }
 
 export interface WorkorderRuntimeRequestEnvelope {
@@ -21,7 +26,7 @@ export interface WorkorderRuntimeRequestEnvelope {
   request_source: string;
   selected_workorder_id?: string;
   selected_machine_id?: string;
-  context: Record<string, unknown>;
+  context: WorkorderRuntimeRequestContext;
   client_trace_id: string;
   payload_version: string;
 }
@@ -30,6 +35,7 @@ export interface WorkorderRuntimeTraceMetadata {
   trace_id?: string;
   agent_id?: string;
   run_id?: string;
+  payload_version?: string;
 }
 
 export interface WorkorderRuntimeResponseEnvelope {
@@ -39,6 +45,19 @@ export interface WorkorderRuntimeResponseEnvelope {
   widgets: unknown[];
   readonly_actions: unknown[];
   diagnostics: unknown[];
+  approval?: WorkorderRuntimeApprovalMetadata;
+}
+
+export interface WorkorderRuntimeApprovalMetadata {
+  approval_required?: boolean;
+  approval_type?: 'maintenance_rca' | string;
+  approval_id?: string;
+  task_id?: string;
+  approval_status?: string;
+  approval_reason?: string;
+  approval_review_route?: string;
+  governance?: unknown;
+  safety?: unknown;
 }
 
 export interface WorkorderRuntimeErrorEnvelope {
@@ -93,9 +112,17 @@ export function parseWorkorderRuntimeResponse(
     return invalidRuntimeResponse('Runtime response was not a JSON object', diagnostics);
   }
 
-  const traceMetadata = getRecord(record.trace_metadata);
-  const payloadVersion = optionalText(record.payload_version) ?? optionalText(traceMetadata?.payload_version);
-  const traceId = optionalText(traceMetadata?.trace_id);
+  const workspacePayload = getRecord(record.workspace_payload);
+  const canonicalRecord = workspacePayload ?? record;
+  const traceMetadata = getRecord(record.trace_metadata) ?? getRecord(canonicalRecord.trace_metadata);
+  const payloadVersion = normalizeRuntimePayloadVersion(
+    optionalText(canonicalRecord.payload_version)
+      ?? optionalText(record.payload_version)
+      ?? optionalText(traceMetadata?.payload_version),
+  );
+  const traceId = optionalText(record.trace_id)
+    ?? optionalText(canonicalRecord.trace_id)
+    ?? optionalText(traceMetadata?.trace_id);
 
   const nextDiagnostics: WorkorderRuntimeContractDiagnostics = {
     ...diagnostics,
@@ -103,13 +130,32 @@ export function parseWorkorderRuntimeResponse(
     payload_version: payloadVersion ?? diagnostics.payload_version,
   };
 
-  const hasCanonicalPayload = Boolean(
+  const hasLegacyRuntimeEnvelope = Boolean(
     payloadVersion
     && traceMetadata
-    && (Array.isArray(record.widgets) || Array.isArray(record.readonly_actions) || record.summary || Array.isArray(record.diagnostics))
+    && (
+      Array.isArray(record.widgets)
+      || Array.isArray(record.readonly_actions)
+      || record.summary
+      || Array.isArray(record.diagnostics)
+    )
+  );
+  const hasWorkspacePayloadEnvelope = Boolean(
+    workspacePayload
+    && isSupportedWorkspacePayloadVersion(payloadVersion)
+    && optionalText(workspacePayload.payload_type) === 'workorder_insight'
+    && optionalText(workspacePayload.intent) === 'workorder_insight'
+    && (
+      workspacePayload.summary
+      || Array.isArray(workspacePayload.recommendations)
+      || Array.isArray(workspacePayload.evidence)
+      || Array.isArray(workspacePayload.kpi_cards)
+      || Array.isArray(workspacePayload.charts)
+      || workspacePayload.debug
+    )
   );
 
-  if (!hasCanonicalPayload) {
+  if (!hasLegacyRuntimeEnvelope && !hasWorkspacePayloadEnvelope) {
     return invalidRuntimeResponse('Runtime response did not match the Workorder Agent payload envelope', nextDiagnostics);
   }
 
@@ -195,6 +241,17 @@ function requiredText(value: unknown): string {
 
 function optionalText(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function normalizeRuntimePayloadVersion(value: string | undefined): string | undefined {
+  if (value === 'v1') {
+    return '1.0';
+  }
+  return value;
+}
+
+function isSupportedWorkspacePayloadVersion(value: string | undefined): boolean {
+  return value === '1.0';
 }
 
 function getRecord(value: unknown): Record<string, unknown> | undefined {

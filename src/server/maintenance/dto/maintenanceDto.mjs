@@ -36,6 +36,57 @@ export function workOrderDetailDto(workorder, equipment, tasks, parts, holdHisto
   };
 }
 
+export function rcaEvidenceDto({
+  workorder,
+  equipment,
+  tasks,
+  parts,
+  holdHistory,
+  relatedHistory,
+  repeatFailure,
+  failureFrequency,
+  reliabilityContext,
+}) {
+  return {
+    workorder: workOrderRcaDto(workorder, equipment, tasks, parts, holdHistory),
+    failure_signal: normalizeFailureSignal(workorder),
+    reliability_context: reliabilityContextDto(reliabilityContext),
+    related_history: relatedHistory.map(workOrderDto),
+    repeat_failure: repeatFailure ? riskMachineDto(repeatFailure) : {},
+    failure_frequency: failureFrequency ? failureFrequencyDto(failureFrequency) : {},
+    evidence_sources: evidenceSources({
+      workorder,
+      tasks,
+      parts,
+      holdHistory,
+      relatedHistory,
+      repeatFailure,
+      failureFrequency,
+      reliabilityContext,
+    }),
+  };
+}
+
+export function workOrderRcaDto(workorder, equipment, tasks, parts, holdHistory) {
+  return {
+    ...workOrderDetailDto(workorder, equipment, tasks, parts, holdHistory),
+    equipment_type: stringOrUndefined(workorder.equipment_type),
+    equipment_type_desc: stringOrUndefined(workorder.equipment_type_desc),
+    description: stringOrUndefined(workorder.description),
+    note: stringOrUndefined(workorder.note),
+    cause_id: stringOrUndefined(workorder.cause_id),
+    cause_path: stringOrUndefined(workorder.cause_path),
+    cause_description: stringOrUndefined(workorder.cause_description),
+    failure_path: stringOrUndefined(workorder.failure_path),
+    action_path: stringOrUndefined(workorder.action_path),
+    request_no: stringOrUndefined(workorder.request_no),
+    request_by: stringOrUndefined(workorder.request_by),
+    request_date: dateString(workorder.request_date),
+    assign_employee: stringOrUndefined(workorder.assign_employee),
+    actual_employee: stringOrUndefined(workorder.actual_employee),
+  };
+}
+
 export function equipmentDto(row) {
   if (!row?.equipment_no) {
     return undefined;
@@ -173,6 +224,16 @@ export function failureFrequencyDto(row) {
   };
 }
 
+export function reliabilityContextDto(row) {
+  return {
+    mtbf_hours: numberOrUndefined(row?.mtbf_hours),
+    mttr_hours: numberOrUndefined(row?.mttr_hours),
+    total_downtime_hours: numberOrZero(row?.total_downtime_hours),
+    health_score: numberOrUndefined(row?.health_score),
+    health_band: stringOrUndefined(row?.health_band),
+  };
+}
+
 export function failureParetoDto(row) {
   return {
     rank: numberOrZero(row.rank),
@@ -199,6 +260,140 @@ export function dashboardSummaryDto(row) {
     top_risk_machines: (row.top_risk_machines ?? []).map(riskMachineDto),
     top_hold_reasons: (row.top_hold_reasons ?? []).map(holdHistoryDto),
   };
+}
+
+export const FAILURE_TAXONOMY_VERSION = 'r5b-phase3a-v1';
+
+const FAILURE_SIGNAL_FIELDS = [
+  'failure_description',
+  'failure_path',
+  'cause_description',
+  'cause_path',
+  'reason',
+  'action_description',
+  'description',
+  'note',
+];
+
+const TAXONOMY_RULES = [
+  { category: 'preventive_maintenance', keywords: ['pm operation', 'preventive maintenance', 'preventative maintenance', 'planned maintenance', 'periodic maintenance', 'routine inspection'] },
+  { category: 'pneumatic', keywords: ['pneumatic', 'air pressure', 'air leak', 'compressed air', 'air cylinder'] },
+  { category: 'hydraulic', keywords: ['hydraulic', 'oil leak', 'hyd oil', 'hydraulic pressure', 'pump pressure'] },
+  { category: 'sensor', keywords: ['sensor', 'photo eye', 'proximity', 'limit switch', 'encoder', 'signal'] },
+  { category: 'software', keywords: ['software', 'program', 'firmware', 'plc logic', 'hmi', 'parameter'] },
+  { category: 'electrical', keywords: ['electrical', 'electric', 'power', 'voltage', 'breaker', 'fuse', 'relay', 'contactor', 'motor trip', 'short circuit'] },
+  { category: 'consumable', keywords: ['consumable', 'spare part', 'filter', 'battery', 'blade', 'brush', 'lubricant'] },
+  { category: 'mechanical', keywords: ['mechanical', 'bearing', 'belt', 'chain', 'gear', 'shaft', 'motor', 'spindle', 'roller', 'jam', 'vibration', 'noise'] },
+  { category: 'process', keywords: ['operator', 'setup', 'calibration', 'alignment', 'adjustment', 'process', 'cleaning'] },
+];
+
+const COMPONENT_RULES = [
+  ['bearing', ['bearing']],
+  ['belt', ['belt']],
+  ['chain', ['chain']],
+  ['gear', ['gear']],
+  ['shaft', ['shaft', 'spindle']],
+  ['motor', ['motor']],
+  ['sensor', ['sensor', 'photo eye', 'proximity', 'limit switch', 'encoder']],
+  ['valve', ['valve']],
+  ['cylinder', ['cylinder']],
+  ['pump', ['pump']],
+  ['filter', ['filter']],
+  ['battery', ['battery']],
+  ['plc_hmi', ['plc', 'hmi']],
+];
+
+const MODE_RULES = [
+  ['leak', ['leak']],
+  ['jammed', ['jam', 'stuck', 'blocked']],
+  ['worn', ['wear', 'worn']],
+  ['broken', ['broken', 'break', 'crack', 'damage']],
+  ['overheated', ['overheat', 'hot', 'temperature']],
+  ['no_signal', ['no signal', 'signal loss']],
+  ['low_pressure', ['low pressure', 'pressure low']],
+  ['trip', ['trip', 'tripped']],
+  ['noise', ['noise', 'vibration']],
+  ['misaligned', ['alignment', 'misalign']],
+  ['maintenance_operation', ['pm operation', 'preventive maintenance', 'planned maintenance']],
+];
+
+export function normalizeFailureSignal(workorder = {}) {
+  const sourceEntries = FAILURE_SIGNAL_FIELDS
+    .map((field) => [field, stringOrUndefined(workorder[field])])
+    .filter(([, value]) => value);
+  const pmJobType = stringOrUndefined(workorder.job_type);
+  const classificationEntries = pmJobType ? [...sourceEntries, ['job_type', pmJobType]] : sourceEntries;
+  const rawText = sourceEntries[0]?.[1] ?? pmJobType ?? undefined;
+  const normalizedSearchText = classificationEntries.map(([, value]) => value).join(' | ').toLowerCase();
+  const category = findCategory(normalizedSearchText);
+  const method = category === 'unknown' ? 'fallback' : 'rule';
+  const component = findRuleValue(normalizedSearchText, COMPONENT_RULES);
+  const mode = findRuleValue(normalizedSearchText, MODE_RULES);
+  const symptom = mode ?? component ?? (category === 'preventive_maintenance' ? 'scheduled_service' : undefined);
+  const label = category === 'unknown'
+    ? (rawText ?? 'Unknown failure signal')
+    : category.split('_').map(capitalize).join(' ');
+
+  return {
+    raw_text: rawText,
+    normalized_key: category === 'unknown' ? 'unknown' : category,
+    normalized_label: label,
+    failure_category: category,
+    failure_component: component,
+    failure_mode: mode,
+    failure_symptom: symptom,
+    taxonomy_version: FAILURE_TAXONOMY_VERSION,
+    taxonomy_method: method,
+    taxonomy_confidence: taxonomyConfidence(method, sourceEntries.length),
+    taxonomy_source_fields: classificationEntries.map(([field]) => field),
+  };
+}
+
+function evidenceSources({ workorder, tasks, parts, holdHistory, relatedHistory, repeatFailure, failureFrequency, reliabilityContext }) {
+  const now = new Date().toISOString();
+  return [
+    { source: 'maintenance.work_order', record_count: workorder ? 1 : 0, generated_at: now },
+    { source: 'maintenance.work_order_task', record_count: tasks.length, generated_at: now },
+    { source: 'maintenance.v_spare_part_usage_by_workorder', record_count: parts.length, generated_at: now },
+    { source: 'maintenance.work_order_hold_history', record_count: holdHistory.length, generated_at: now },
+    { source: 'maintenance.v_machine_maintenance_history', record_count: relatedHistory.length, generated_at: now },
+    { source: 'maintenance.v_repeat_failure_candidates', record_count: repeatFailure ? 1 : 0, generated_at: now },
+    { source: 'maintenance.work_order.failure_frequency', record_count: failureFrequency ? 1 : 0, generated_at: now },
+    { source: 'maintenance.v_mtbf_mttr_base', record_count: reliabilityContext ? 1 : 0, generated_at: now },
+  ];
+}
+
+function findCategory(value) {
+  for (const rule of TAXONOMY_RULES) {
+    if (includesAny(value, rule.keywords)) {
+      return rule.category;
+    }
+  }
+  return 'unknown';
+}
+
+function findRuleValue(value, rules) {
+  for (const [label, keywords] of rules) {
+    if (includesAny(value, keywords)) {
+      return label;
+    }
+  }
+  return undefined;
+}
+
+function includesAny(value, keywords) {
+  return keywords.some((keyword) => value.includes(keyword));
+}
+
+function taxonomyConfidence(method, sourceFieldCount) {
+  if (method === 'fallback') {
+    return sourceFieldCount > 0 ? 0.25 : 0;
+  }
+  return sourceFieldCount > 1 ? 0.85 : 0.7;
+}
+
+function capitalize(value) {
+  return value ? `${value[0].toUpperCase()}${value.slice(1)}` : value;
 }
 
 function numberOrZero(value) {

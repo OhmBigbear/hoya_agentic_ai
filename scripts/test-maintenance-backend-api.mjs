@@ -14,13 +14,21 @@ import {
   buildFailureParetoQuery,
   buildMachineHealthQuery,
   buildMtbfMttrQuery,
+  buildRcaFailureFrequencyQuery,
+  buildRcaReliabilityContextQuery,
+  buildRcaRepeatFailureQuery,
   buildReliabilityMtbfQuery,
   buildReliabilityMttrQuery,
   buildRepeatFailuresQuery,
 } from '../src/server/maintenance/repositories/maintenanceAnalyticsRepository.mjs';
 import { buildStockRiskQuery } from '../src/server/maintenance/repositories/maintenanceInventoryRepository.mjs';
-import { buildWorkordersQuery } from '../src/server/maintenance/repositories/maintenanceWorkorderRepository.mjs';
+import {
+  buildRcaRelatedHistoryQuery,
+  buildRcaWorkorderBaseQuery,
+  buildWorkordersQuery,
+} from '../src/server/maintenance/repositories/maintenanceWorkorderRepository.mjs';
 import { createMaintenanceRouter, matchRoute } from '../src/server/maintenance/routes/maintenanceRoutes.mjs';
+import { normalizeFailureSignal } from '../src/server/maintenance/dto/maintenanceDto.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -128,6 +136,54 @@ function testQueryBuilders() {
   assert.match(repeats.text, /LEFT JOIN maintenance\.work_order tracking/);
   assert.doesNotMatch(repeats.text, /maintenance\.stg_/i);
   assert.deepEqual(repeats.values.slice(0, 4), ['MC-01', 'Bearing noise', '2026-01-01', '2026-02-01']);
+
+  const rcaBase = buildRcaWorkorderBaseQuery();
+  assert.match(rcaBase.text, /FROM maintenance\.work_order wo/);
+  assert.match(rcaBase.text, /WHERE wo\.workorder_no = \$1/);
+  assert.doesNotMatch(rcaBase.text, /maintenance\.stg_/i);
+
+  const rcaHistoryDefault = buildRcaRelatedHistoryQuery('MC-01', {});
+  assert.match(rcaHistoryDefault.text, /maintenance\.v_machine_maintenance_history/);
+  assert.deepEqual(rcaHistoryDefault.values, ['MC-01', 10]);
+  assert.equal(rcaHistoryDefault.limit, 10);
+
+  const rcaHistoryClamped = buildRcaRelatedHistoryQuery('MC-01', {
+    history_limit: 999,
+    from: '2026-01-01',
+    to: '2026-02-01',
+    exclude_workorder_no: 'WO-1001',
+  });
+  assert.deepEqual(rcaHistoryClamped.values, ['MC-01', '2026-01-01', '2026-02-01', 'WO-1001', 50]);
+  assert.equal(rcaHistoryClamped.limit, 50);
+  assert.doesNotMatch(rcaHistoryClamped.text, /999/);
+
+  const rcaReliability = buildRcaReliabilityContextQuery('MC-01', { from: '2026-01-01' });
+  assert.match(rcaReliability.text, /maintenance\.v_mtbf_mttr_base/);
+  assert.deepEqual(rcaReliability.values, ['MC-01', '2026-01-01']);
+
+  const rcaRepeat = buildRcaRepeatFailureQuery('MC-01', 'Bearing noise');
+  assert.match(rcaRepeat.text, /maintenance\.v_repeat_failure_candidates candidate/);
+  assert.deepEqual(rcaRepeat.values, ['MC-01', 'Bearing noise']);
+
+  const rcaFrequency = buildRcaFailureFrequencyQuery('Bearing noise', { to: '2026-02-01' });
+  assert.match(rcaFrequency.text, /FROM maintenance\.work_order/);
+  assert.deepEqual(rcaFrequency.values, ['Bearing noise', '2026-02-01']);
+  assert.doesNotMatch(rcaFrequency.text, /maintenance\.stg_/i);
+
+  const mechanicalSignal = normalizeFailureSignal({ failure_description: 'Bearing noise from spindle' });
+  assert.equal(mechanicalSignal.failure_category, 'mechanical');
+  assert.equal(mechanicalSignal.failure_component, 'bearing');
+  assert.equal(mechanicalSignal.taxonomy_method, 'rule');
+  assert.equal(mechanicalSignal.taxonomy_version, 'r5b-phase3a-v1');
+
+  const pmSignal = normalizeFailureSignal({ description: 'PM Operation monthly inspection', job_type: 'PM Operation' });
+  assert.equal(pmSignal.failure_category, 'preventive_maintenance');
+  assert.notEqual(pmSignal.failure_category, 'mechanical');
+  assert.equal(pmSignal.taxonomy_method, 'rule');
+
+  const fallbackSignal = normalizeFailureSignal({});
+  assert.equal(fallbackSignal.failure_category, 'unknown');
+  assert.equal(fallbackSignal.taxonomy_method, 'fallback');
 }
 
 async function testRoutes() {
@@ -189,6 +245,53 @@ async function testRoutes() {
           total: 1,
           limit: 50,
           offset: 0,
+        };
+      },
+      async getRcaEvidence(filters) {
+        calls.push(['getRcaEvidence', filters]);
+        if (filters.workorder_no === 'WO-404') {
+          return null;
+        }
+        return {
+          workorder: {
+            workorder_no: filters.workorder_no,
+            equipment_no: 'MC-01',
+            total_repair_time_hours: 1.5,
+            down_time_hours: 2,
+            tasks: [],
+            parts: [],
+            hold_history: [],
+          },
+          failure_signal: {
+            raw_text: 'Bearing noise',
+            normalized_key: 'mechanical',
+            normalized_label: 'Mechanical',
+            failure_category: 'mechanical',
+            failure_component: 'bearing',
+            taxonomy_version: 'r5b-phase3a-v1',
+            taxonomy_method: 'rule',
+            taxonomy_confidence: 0.7,
+            taxonomy_source_fields: ['failure_description'],
+          },
+          reliability_context: {
+            mtbf_hours: 12,
+            mttr_hours: 1.5,
+            total_downtime_hours: 2,
+            health_score: 72,
+            health_band: 'healthy',
+          },
+          related_history: [],
+          repeat_failure: undefined,
+          failure_frequency: undefined,
+          evidence_sources: [
+            { source: 'maintenance.work_order', record_count: 1, generated_at: '2026-06-06T00:00:00.000Z' },
+            { source: 'maintenance.work_order_task', record_count: 0, generated_at: '2026-06-06T00:00:00.000Z' },
+          ],
+          warnings: [
+            'No task history was found for this workorder.',
+            'No part or consumable usage was found for this workorder.',
+            'No hold history was found for this workorder.',
+          ],
         };
       },
       async listFailureFrequency(filters) {
@@ -276,6 +379,26 @@ async function testRoutes() {
 
   assert.deepEqual(matchRoute('/api/maintenance/analytics/failure-frequency'), { name: 'failureFrequency', params: {} });
   assert.deepEqual(matchRoute('/api/maintenance/analytics/failure-pareto'), { name: 'failurePareto', params: {} });
+  assert.deepEqual(matchRoute('/api/maintenance/analytics/rca-evidence'), { name: 'rcaEvidence', params: {} });
+
+  const rcaMissing = await invoke(router, '/api/maintenance/analytics/rca-evidence');
+  assert.equal(rcaMissing.statusCode, 400);
+  assert.equal(rcaMissing.body.error.code, 'RCA_WORKORDER_REQUIRED');
+
+  const rcaNotFound = await invoke(router, '/api/maintenance/analytics/rca-evidence?workorder_no=WO-404');
+  assert.equal(rcaNotFound.statusCode, 404);
+  assert.equal(rcaNotFound.body.error.code, 'WORKORDER_NOT_FOUND');
+
+  const rcaEndpoint = await invoke(router, '/api/maintenance/analytics/rca-evidence?workorder_no=WO-1001&history_limit=999&include_related=false');
+  assert.equal(rcaEndpoint.statusCode, 200);
+  assert.equal(rcaEndpoint.body.data.workorder.workorder_no, 'WO-1001');
+  assert.equal(rcaEndpoint.body.data.failure_signal.failure_category, 'mechanical');
+  assert.equal(rcaEndpoint.body.data.failure_signal.taxonomy_version, 'r5b-phase3a-v1');
+  assert.equal(rcaEndpoint.body.data.reliability_context.health_band, 'healthy');
+  assert.equal(rcaEndpoint.body.data.evidence_sources[0].source, 'maintenance.work_order');
+  assert.equal(rcaEndpoint.body.data.warnings, undefined);
+  assert.match(rcaEndpoint.body.warnings.join(' '), /No task history/);
+  assert.deepEqual(calls.at(-1), ['getRcaEvidence', { workorder_no: 'WO-1001', history_limit: '999', include_related: 'false' }]);
 
   const frequencyEndpoint = await invoke(router, '/api/maintenance/analytics/failure-frequency?site=HOYA-BKK&group_by=failure_signal&limit=10');
   assert.equal(frequencyEndpoint.statusCode, 200);

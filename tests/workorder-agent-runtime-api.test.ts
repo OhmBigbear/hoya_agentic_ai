@@ -20,6 +20,8 @@ import {
   buildWorkorderWidgetPreviewModel,
 } from '../src/ui-registry';
 import {
+  agenticCoreWorkspaceRuntimeResponse,
+  agenticCoreWorkspaceRuntimeResponseV1Alias,
   runtimeWorkorderAgentResponse,
   unsafeRuntimeWorkorderAgentResponse,
 } from './fixtures/ui-registry/workorder-agent-payload.fixture';
@@ -145,6 +147,26 @@ describe('workorder agent runtime API', () => {
     });
   });
 
+  it('includes RCA approval creation only when explicitly requested in context', () => {
+    const defaultRequest = buildWorkorderRuntimeRequest(runtimeRequest, () => 'default-trace');
+    const approvalRequest = buildWorkorderRuntimeRequest({
+      ...runtimeRequest,
+      context: {
+        ...runtimeRequest.context,
+        create_approval_request: true,
+      },
+      request_source: 'hoya_ui.rca_approval_request',
+    }, () => 'approval-trace');
+
+    expect(defaultRequest.context).toEqual({ filters: { status: 'open' } });
+    expect(defaultRequest.context).not.toHaveProperty('create_approval_request');
+    expect(approvalRequest.context).toMatchObject({
+      filters: { status: 'open' },
+      create_approval_request: true,
+    });
+    expect(approvalRequest.request_source).toBe('hoya_ui.rca_approval_request');
+  });
+
   it('parses valid runtime response shapes', () => {
     const parsed = parseWorkorderRuntimeResponse(runtimeWorkorderAgentResponse, {
       endpoint_url: 'https://agentic-core.example.com/api/workorder-agent/runtime',
@@ -158,6 +180,34 @@ describe('workorder agent runtime API', () => {
       client_trace_id: 'client-trace-021-b09',
       runtime_trace_id: 'trace-runtime-workorder-021',
       payload_version: '2.0',
+    });
+  });
+
+  it('accepts Agentic Core workspace_payload runtime responses', () => {
+    const parsed = parseWorkorderRuntimeResponse(agenticCoreWorkspaceRuntimeResponse, {
+      endpoint_url: 'https://agentic-core.example.com/api/workorder-agent/runtime',
+      client_trace_id: 'client-trace-022-r5b',
+    });
+
+    expect(parsed.ok).toBe(true);
+    expect(parsed.payload).toEqual(agenticCoreWorkspaceRuntimeResponse);
+    expect(parsed.diagnostics).toMatchObject({
+      endpoint_url: 'https://agentic-core.example.com/api/workorder-agent/runtime',
+      client_trace_id: 'client-trace-022-r5b',
+      runtime_trace_id: 'trace-agentic-core-workspace-022',
+      payload_version: '1.0',
+    });
+  });
+
+  it('normalizes workspace_payload payload_version v1 as 1.0', () => {
+    const parsed = parseWorkorderRuntimeResponse(agenticCoreWorkspaceRuntimeResponseV1Alias, {
+      client_trace_id: 'client-trace-022-r5b',
+    });
+
+    expect(parsed.ok).toBe(true);
+    expect(parsed.diagnostics).toMatchObject({
+      runtime_trace_id: 'trace-agentic-core-workspace-022',
+      payload_version: '1.0',
     });
   });
 
@@ -186,6 +236,30 @@ describe('workorder agent runtime API', () => {
       runtime_trace_id: 'trace-runtime-workorder-021',
       payload_version: '2.0',
     });
+  });
+
+  it('handles successful Agentic Core workspace_payload envelopes', async () => {
+    const result = await requestWorkorderAgentRuntime(runtimeRequest, {
+      baseUrl: 'https://agentic-core.example.com',
+      path: '/api/workorder-agent/runtime',
+      fetchImpl: vi.fn().mockResolvedValue(new Response(JSON.stringify(agenticCoreWorkspaceRuntimeResponse), { status: 200 })),
+      now: fixedClock(),
+    });
+
+    expect(result).toMatchObject({
+      status: 'success',
+      source: 'runtime',
+      requestedAt: '2026-06-05T00:00:00.000Z',
+      completedAt: '2026-06-05T00:00:01.000Z',
+    });
+    expect(result.status === 'success' ? result.payload : null).toEqual(agenticCoreWorkspaceRuntimeResponse);
+    expect(result.diagnostics).toMatchObject({
+      endpoint_mode: 'base_url_path',
+      endpoint_url: 'https://agentic-core.example.com/api/workorder-agent/runtime',
+      runtime_trace_id: 'trace-agentic-core-workspace-022',
+      payload_version: '1.0',
+    });
+    expect(result.diagnostics.error_code).toBeUndefined();
   });
 
   it('handles disabled mode without calling the backend', async () => {
@@ -396,6 +470,22 @@ describe('workorder agent runtime API', () => {
       payload_version: '2.0',
     });
     expect(model.widgets.some((widget) => widget.id === 'runtime-open-workorders')).toBe(true);
+  });
+
+  it('Agentic Core workspace_payload responses normalize through the existing widget adapter', () => {
+    const model = buildWorkorderWidgetPreviewModel(agenticCoreWorkspaceRuntimeResponse);
+
+    expect(model.safeToRender).toBe(true);
+    expect(model.diagnostics.traceMetadata).toMatchObject({
+      trace_id: 'trace-agentic-core-workspace-022',
+      agent_id: 'workorder-agent',
+      payload_version: '1.0',
+    });
+    expect(model.diagnostics.lastPayloadType).toBe('workorder_insight');
+    expect(model.diagnostics.intent).toBe('workorder_insight');
+    expect(model.widgets.some((widget) => widget.id === 'maintenance.workorders.adapter.summary')).toBe(true);
+    expect(model.widgets.some((widget) => widget.id === 'maintenance.workorders.adapter.insights')).toBe(true);
+    expect(model.widgets.some((widget) => widget.id === 'maintenance.workorders.adapter.evidence')).toBe(true);
   });
 
   it('unsafe runtime actions remain rejected by the existing adapter boundary', () => {

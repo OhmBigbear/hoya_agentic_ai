@@ -88,11 +88,41 @@ export function createMaintenanceAnalyticsRepository(db) {
       return listResult(result.rows, query.limit, query.offset);
     },
 
+    buildRcaRepeatFailureQuery,
+    async getRcaRepeatFailure(equipmentNo, failureSignal) {
+      if (!equipmentNo || !failureSignal) {
+        return null;
+      }
+      const query = buildRcaRepeatFailureQuery(equipmentNo, failureSignal);
+      const result = await db.query(query.text, query.values);
+      return result.rows[0] ?? null;
+    },
+
+    buildRcaReliabilityContextQuery,
+    async getRcaReliabilityContext(equipmentNo, filters = {}) {
+      if (!equipmentNo) {
+        return null;
+      }
+      const query = buildRcaReliabilityContextQuery(equipmentNo, filters);
+      const result = await db.query(query.text, query.values);
+      return result.rows[0] ?? null;
+    },
+
     buildFailureFrequencyQuery,
     async listFailureFrequency(filters = {}) {
       const query = buildFailureFrequencyQuery(filters);
       const result = await db.query(query.text, query.values);
       return listResult(result.rows, query.limit, query.offset);
+    },
+
+    buildRcaFailureFrequencyQuery,
+    async getRcaFailureFrequency(failureSignal, filters = {}) {
+      if (!failureSignal) {
+        return null;
+      }
+      const query = buildRcaFailureFrequencyQuery(failureSignal, filters);
+      const result = await db.query(query.text, query.values);
+      return result.rows[0] ?? null;
     },
 
     buildFailureParetoQuery,
@@ -120,6 +150,114 @@ export function createMaintenanceAnalyticsRepository(db) {
         top_hold_reasons: holds.rows,
       };
     },
+  };
+}
+
+export function buildRcaReliabilityContextQuery(equipmentNo, filters = {}) {
+  const values = [equipmentNo];
+  const predicates = ['equipment_no = $1'];
+  addDateWindow(predicates, values, 'failure_start', filters.from, filters.to);
+
+  return {
+    text: `WITH reliability AS (
+             SELECT
+               equipment_no,
+               count(*)::int AS failure_count,
+               avg(hours_since_previous_repair) FILTER (WHERE hours_since_previous_repair > 0) AS mtbf_hours,
+               avg(total_repair_time_hours) AS mttr_hours,
+               coalesce(sum(down_time_hours), 0) AS total_downtime_hours
+             FROM maintenance.v_mtbf_mttr_base
+             WHERE ${predicates.join(' AND ')}
+             GROUP BY equipment_no
+           ),
+           scored AS (
+             SELECT *,
+               greatest(0, least(100,
+                 100
+                 - least(45, coalesce(failure_count, 0) * 8)
+                 - least(25, coalesce(mttr_hours, 0) * 3)
+                 - least(20, coalesce(total_downtime_hours, 0) * 0.8)
+                 + least(15, coalesce(mtbf_hours, 0) / 24)
+               )) AS health_score
+             FROM reliability
+           )
+           SELECT
+             mtbf_hours,
+             mttr_hours,
+             total_downtime_hours,
+             health_score,
+             CASE
+               WHEN health_score < 40 THEN 'critical'
+               WHEN health_score < 70 THEN 'watch'
+               ELSE 'healthy'
+             END AS health_band
+           FROM scored
+           LIMIT 1`,
+    values,
+  };
+}
+
+export function buildRcaRepeatFailureQuery(equipmentNo, failureSignal) {
+  return {
+    text: `SELECT
+             candidate.equipment_no,
+             max(tracking.equipment_desc) AS equipment_desc,
+             candidate.failure_signal,
+             candidate.workorder_count,
+             coalesce(sum(tracking.down_time_hours), 0) AS total_downtime_hours,
+             avg(tracking.total_repair_time_hours) FILTER (WHERE tracking.total_repair_time_hours IS NOT NULL) AS avg_repair_time_hours,
+             candidate.first_seen_at,
+             candidate.last_seen_at,
+             candidate.workorders
+           FROM maintenance.v_repeat_failure_candidates candidate
+           LEFT JOIN maintenance.work_order tracking
+             ON tracking.equipment_no = candidate.equipment_no
+            AND coalesce(tracking.failure_description, tracking.reason, tracking.description) = candidate.failure_signal
+           WHERE candidate.equipment_no = $1
+             AND candidate.failure_signal = $2
+           GROUP BY
+             candidate.equipment_no,
+             candidate.failure_signal,
+             candidate.workorder_count,
+             candidate.first_seen_at,
+             candidate.last_seen_at,
+             candidate.workorders
+           LIMIT 1`,
+    values: [equipmentNo, failureSignal],
+  };
+}
+
+export function buildRcaFailureFrequencyQuery(failureSignal, filters = {}) {
+  const values = [failureSignal];
+  const predicates = ['failure_signal = $1'];
+  addDateWindow(predicates, values, 'failure_at', filters.from, filters.to);
+
+  return {
+    text: `WITH failure_base AS (
+             SELECT
+               coalesce(failure_description, reason, action_description, 'Unspecified failure') AS failure_signal,
+               equipment_no,
+               workorder_no,
+               coalesce(act_work_start, plan_start) AS failure_at,
+               down_time_hours,
+               total_repair_time_hours
+             FROM maintenance.work_order
+             WHERE coalesce(failure_description, reason, action_description) IS NOT NULL
+           )
+           SELECT
+             failure_signal,
+             count(*)::int AS failure_count,
+             count(DISTINCT equipment_no)::int AS affected_equipment_count,
+             count(DISTINCT workorder_no)::int AS workorder_count,
+             coalesce(sum(down_time_hours), 0) AS total_downtime_hours,
+             avg(total_repair_time_hours) FILTER (WHERE total_repair_time_hours IS NOT NULL) AS avg_repair_time_hours,
+             min(failure_at) AS first_seen_at,
+             max(failure_at) AS last_seen_at
+           FROM failure_base
+           WHERE ${predicates.join(' AND ')}
+           GROUP BY failure_signal
+           LIMIT 1`,
+    values,
   };
 }
 

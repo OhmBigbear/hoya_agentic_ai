@@ -347,6 +347,95 @@ export const unsafeRuntimeWorkorderAgentResponse = {
   ],
 };
 
+export const approvalRuntimeWorkorderAgentResponse = {
+  ...runtimeWorkorderAgentResponse,
+  approval: {
+    approval_required: true,
+    approval_type: 'maintenance_rca',
+    approval_id: 'approval-rca-100',
+    task_id: 'task-rca-100',
+    approval_status: 'pending',
+    approval_reason: 'Human review required before promoting RCA advisory output.',
+    approval_review_route: '/approval-inbox?task_id=task-rca-100',
+    governance: {
+      decision_flow: 'agentic_core_hitl',
+    },
+    safety: {
+      advisory_only: true,
+      cmms_writeback_allowed: false,
+      workorder_creation_allowed: false,
+    },
+  },
+};
+
+export const agenticCoreWorkspaceRuntimeResponse = {
+  assistant_text: 'Agentic Core found open corrective workorders on POLISHING-7A and recommends operator review.',
+  trace_id: 'trace-agentic-core-workspace-022',
+  generated_by_agent_id: 'workorder-agent',
+  confidence: 'high',
+  workspace_payload: {
+    payload_version: '1.0',
+    payload_type: 'workorder_insight',
+    intent: 'workorder_insight',
+    summary: {
+      title: 'Workorder runtime insight',
+      headline: 'Open corrective workorders are concentrated on POLISHING-7A with spare-part review recommended.',
+      confidence: 'high',
+      severity: 'warning',
+      time_range: { label: 'Last 14 days' },
+      limitations: ['Advisory only until human review is complete.'],
+    },
+    kpi_cards: [],
+    charts: [],
+    recommendations: [
+      {
+        id: 'review-polishing-7a',
+        priority: 'high',
+        title: 'Review POLISHING-7A corrective queue',
+        rationale: 'Three recent corrective workorders reference the same station and may indicate repeat failure risk.',
+        suggested_action: 'Inspect the open corrective queue before any CMMS write-back.',
+        related_refs: ['agentic-workorder-query'],
+      },
+    ],
+    evidence: [
+      {
+        source_type: 'tool',
+        source_name: 'Agentic Core workorder query',
+        reference: 'agentic-workorder-query',
+        description: 'Filtered open corrective workorder rows for POLISHING-7A.',
+      },
+    ],
+    filters: {
+      equipment_no: 'POLISHING-7A',
+      status: 'open',
+    },
+    debug: {
+      normalized_by: 'agentic_core.workorder_agent',
+    },
+  },
+};
+
+export const agenticCoreWorkspaceRuntimeResponseWithApproval = {
+  ...agenticCoreWorkspaceRuntimeResponse,
+  approval: {
+    approval_required: true,
+    approval_type: 'maintenance_rca',
+    approval_id: 'approval-agentic-core-022',
+    task_id: 'task-agentic-core-022',
+    approval_status: 'pending',
+    approval_reason: 'Review generated RCA advisory before promotion.',
+    approval_review_route: '/approval-inbox?task_id=task-agentic-core-022',
+  },
+};
+
+export const agenticCoreWorkspaceRuntimeResponseV1Alias = {
+  ...agenticCoreWorkspaceRuntimeResponse,
+  workspace_payload: {
+    ...agenticCoreWorkspaceRuntimeResponse.workspace_payload,
+    payload_version: 'v1',
+  },
+};
+
 export const unknownWidgetRuntimeWorkorderAgentResponse = {
   ...runtimeWorkorderAgentResponse,
   widgets: [

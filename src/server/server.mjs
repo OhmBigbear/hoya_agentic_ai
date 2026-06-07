@@ -31,7 +31,7 @@ async function main() {
 
   const router = createMaintenanceRouter({
     workorderService: createMaintenanceWorkorderService(workorderRepository),
-    analyticsService: createMaintenanceAnalyticsService(analyticsRepository, inventoryRepository),
+    analyticsService: createMaintenanceAnalyticsService(analyticsRepository, inventoryRepository, workorderRepository),
   });
 
   const server = http.createServer(createCorsHandler(router));

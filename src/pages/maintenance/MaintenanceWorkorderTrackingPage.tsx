@@ -7,9 +7,11 @@ import {
   Bot,
   CheckCircle,
   Clock,
+  ExternalLink,
   History,
   Package,
   Send,
+  ShieldCheck,
   Sparkles,
   Timer,
   User,
@@ -72,6 +74,7 @@ import {
 } from '../../services/workorderAgentRuntimeApi';
 import { buildWorkorderRuntimeDiagnosticPayload } from '../../services/workorderAgentRuntimeContract';
 import {
+  AGENTIC_CORE_API_BASE_URL,
   WORKORDER_AGENT_RUNTIME_PREVIEW_ENABLED,
   WORKORDER_WIDGET_DEV_PREVIEW_ENABLED,
   WORKORDER_WIDGET_SHADOW_MODE_ENABLED,
@@ -173,6 +176,16 @@ export interface WorkorderRuntimeWidgetWorkspaceState {
     payloadVersion?: string;
     widgetTypes: string[];
   };
+}
+
+export interface WorkorderRcaApprovalMetadata {
+  approvalRequired: boolean;
+  approvalType: string;
+  approvalId?: string;
+  taskId?: string;
+  status?: string;
+  reason?: string;
+  reviewRoute?: string;
 }
 
 const emptyRuntimeWidgetWorkspaceState: WorkorderRuntimeWidgetWorkspaceState = {
@@ -519,7 +532,7 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
     }
   };
 
-  const handleRuntimeFetch = useCallback(async () => {
+  const handleRuntimeFetch = useCallback(async (options: { createApprovalRequest?: boolean } = {}) => {
     const question = inputMessage.trim() || 'Summarize current maintenance blockers';
     const requestedAt = new Date().toISOString();
     setRuntimeFetchDiagnostics({
@@ -534,22 +547,28 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
       requestedAt,
     });
 
+    const context: WorkorderAgentRuntimeRequest['context'] = {
+      filters: buildOperationsWorkspacePreviewFilters(filters, operationsWorkspace.state, selectedWorkorder),
+      workspace_state: {
+        selected_workorder_id: operationsWorkspace.state.selectedWorkorderId,
+        selected_machine_id: operationsWorkspace.state.selectedMachineId,
+        selected_insight_id: operationsWorkspace.state.selectedInsightId,
+        focused_chart_id: operationsWorkspace.state.focusedChartId,
+        time_range: operationsWorkspace.state.synchronizedTimeRange?.value ?? operationsWorkspace.state.timeRange,
+      },
+    };
+
+    if (options.createApprovalRequest) {
+      context.create_approval_request = true;
+    }
+
     const result = await runtimeRequest({
       query: question,
       selected_workorder_id: operationsWorkspace.state.selectedWorkorderId ?? selectedWorkorder?.workorder_no,
       selected_machine_id: operationsWorkspace.state.selectedMachineId ?? selectedWorkorder?.equipment_no,
       surface_id: maintenanceWorkordersSurfaceId,
-      request_source: 'hoya_ui.developer_diagnostics',
-      context: {
-        filters: buildOperationsWorkspacePreviewFilters(filters, operationsWorkspace.state, selectedWorkorder),
-        workspace_state: {
-          selected_workorder_id: operationsWorkspace.state.selectedWorkorderId,
-          selected_machine_id: operationsWorkspace.state.selectedMachineId,
-          selected_insight_id: operationsWorkspace.state.selectedInsightId,
-          focused_chart_id: operationsWorkspace.state.focusedChartId,
-          time_range: operationsWorkspace.state.synchronizedTimeRange?.value ?? operationsWorkspace.state.timeRange,
-        },
-      },
+      request_source: options.createApprovalRequest ? 'hoya_ui.rca_approval_request' : 'hoya_ui.developer_diagnostics',
+      context,
     });
 
     if (result.status === 'success' && !isWorkorderAgentPayloadLike(result.payload)) {
@@ -646,6 +665,7 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
                 runtimeStatus={runtimeFetchDiagnostics}
                 workspaceState={runtimeWidgetWorkspaceState}
                 onRuntimeFetch={handleRuntimeFetch}
+                onApprovalRequest={() => handleRuntimeFetch({ createApprovalRequest: true })}
               />
             ) : null}
 
@@ -838,10 +858,12 @@ export function WorkorderRuntimeMainSurface({
   runtimeStatus,
   workspaceState,
   onRuntimeFetch,
+  onApprovalRequest,
 }: {
   runtimeStatus?: RuntimeFetchDiagnosticsState;
   workspaceState?: WorkorderRuntimeWidgetWorkspaceState;
   onRuntimeFetch?: () => Promise<void>;
+  onApprovalRequest?: () => Promise<void>;
 }) {
   const derivedWorkspaceState = useMemo(() => {
     if (workspaceState) {
@@ -877,6 +899,7 @@ export function WorkorderRuntimeMainSurface({
   const evidenceWidgets = mainWidgets.filter((widget) => widget.regionId === 'maintenance.workorders.evidence');
   const actionWidgets = mainWidgets.filter((widget): widget is Extract<UiWidget, { type: 'action_list_readonly' }> => widget.regionId === 'maintenance.workorders.actions.readonly' && widget.type === 'action_list_readonly');
   const executiveKpis = buildRuntimeExecutiveKpis(derivedWorkspaceState, executiveWidgets, tableWidgets, insightWidgets);
+  const approval = getWorkorderRcaApprovalMetadata(derivedWorkspaceState.payload);
 
   return (
     <section
@@ -895,6 +918,9 @@ export function WorkorderRuntimeMainSurface({
         <div className="flex flex-wrap items-center gap-2">
           {derivedWorkspaceState.source ? (
             <Badge className="bg-slate-700/70 text-slate-200 border-slate-500/30">{derivedWorkspaceState.source}</Badge>
+          ) : null}
+          {onApprovalRequest && hasRenderableMainWidgets ? (
+            <RuntimeApprovalRequestButton isLoading={isLoading} onApprovalRequest={onApprovalRequest} />
           ) : null}
           {onRuntimeFetch ? (
             <Button
@@ -992,6 +1018,8 @@ export function WorkorderRuntimeMainSurface({
             </RuntimeWorkspaceSection>
           ) : null}
 
+          {approval ? <RuntimeApprovalStatusPanel approval={approval} /> : null}
+
           {rejectedCount > 0 ? (
             <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-100" data-testid="workorder-runtime-main-fallback">
               {rejectedCount} runtime widget payload{rejectedCount === 1 ? '' : 's'} could not be rendered and were safely ignored.
@@ -1000,13 +1028,16 @@ export function WorkorderRuntimeMainSurface({
           <RuntimeDiagnosticsDisclosure workspaceState={derivedWorkspaceState} rejectedCount={rejectedCount} />
         </div>
       ) : hasPayload ? (
-        <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100" data-testid="workorder-runtime-main-fallback">
-          <h4 className="text-sm font-semibold text-amber-50">Runtime payload needs review</h4>
-          <p className="mt-1">
-            Runtime data was received, but no supported workorder workspace widgets were available for this surface.
-            {derivedWorkspaceState.errorReason ? <span> {derivedWorkspaceState.errorReason}</span> : null}
-          </p>
-          <RuntimeDiagnosticsDisclosure workspaceState={derivedWorkspaceState} rejectedCount={rejectedCount} />
+        <div className="space-y-4">
+          <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100" data-testid="workorder-runtime-main-fallback">
+            <h4 className="text-sm font-semibold text-amber-50">Runtime payload needs review</h4>
+            <p className="mt-1">
+              Runtime data was received, but no supported workorder workspace widgets were available for this surface.
+              {derivedWorkspaceState.errorReason ? <span> {derivedWorkspaceState.errorReason}</span> : null}
+            </p>
+            <RuntimeDiagnosticsDisclosure workspaceState={derivedWorkspaceState} rejectedCount={rejectedCount} />
+          </div>
+          {approval ? <RuntimeApprovalStatusPanel approval={approval} /> : null}
         </div>
       ) : (
         <div className="rounded-lg border border-dashed border-cyan-400/30 bg-[#0f1623] p-5 text-sm text-slate-300" data-testid="workorder-runtime-main-empty">
@@ -1023,6 +1054,143 @@ export function WorkorderRuntimeMainSurface({
         </div>
       ) : null}
     </section>
+  );
+}
+
+export function RuntimeApprovalRequestButton({
+  isLoading,
+  onApprovalRequest,
+}: {
+  isLoading: boolean;
+  onApprovalRequest: () => Promise<void>;
+}) {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      className="h-8 border-emerald-400/30 px-3 text-xs text-emerald-200 hover:bg-emerald-500/10 hover:text-emerald-100"
+      onClick={() => { void onApprovalRequest(); }}
+      disabled={isLoading}
+    >
+      <ShieldCheck className="w-3 h-3" />
+      Request Human Approval
+    </Button>
+  );
+}
+
+export function getWorkorderRcaApprovalMetadata(payload: unknown): WorkorderRcaApprovalMetadata | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return null;
+  }
+
+  const approval = (payload as Record<string, unknown>).approval;
+  if (!approval || typeof approval !== 'object' || Array.isArray(approval)) {
+    return null;
+  }
+
+  const record = approval as Record<string, unknown>;
+  const approvalType = typeof record.approval_type === 'string' && record.approval_type.trim()
+    ? record.approval_type.trim()
+    : 'maintenance_rca';
+
+  return {
+    approvalRequired: typeof record.approval_required === 'boolean' ? record.approval_required : true,
+    approvalType,
+    approvalId: optionalDisplayText(record.approval_id),
+    taskId: optionalDisplayText(record.task_id),
+    status: optionalDisplayText(record.approval_status),
+    reason: optionalDisplayText(record.approval_reason),
+    reviewRoute: optionalDisplayText(record.approval_review_route),
+  };
+}
+
+export function buildApprovalReviewHref(route: string | undefined, baseUrl = AGENTIC_CORE_API_BASE_URL): string | null {
+  if (!route?.trim()) {
+    return null;
+  }
+
+  const trimmedRoute = route.trim();
+  if (/^https?:\/\//i.test(trimmedRoute)) {
+    return trimmedRoute;
+  }
+
+  const trimmedBaseUrl = baseUrl.trim();
+  if (!trimmedBaseUrl) {
+    return trimmedRoute;
+  }
+
+  try {
+    return new URL(trimmedRoute, ensureTrailingSlash(trimmedBaseUrl)).toString();
+  } catch {
+    return trimmedRoute;
+  }
+}
+
+function RuntimeApprovalStatusPanel({ approval }: { approval: WorkorderRcaApprovalMetadata }) {
+  const reviewHref = buildApprovalReviewHref(approval.reviewRoute);
+  const safetyBoundary = [
+    'Advisory only',
+    'No final RCA',
+    'No corrective action execution',
+    'No preventive action execution',
+    'No CMMS write-back',
+    'No workorder creation',
+  ];
+
+  return (
+    <RuntimeWorkspaceSection
+      eyebrow="Human Approval"
+      title="RCA approval request"
+      description="Review and decisions stay in Agentic Core Approval Inbox."
+      testId="workorder-runtime-approval-panel"
+    >
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(260px,340px)]">
+        <div className="rounded-lg border border-emerald-400/20 bg-[#0f1623] p-4">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <Badge className="border-emerald-400/30 bg-emerald-500/10 text-emerald-100">Approval Required</Badge>
+            <Badge className="border-cyan-400/20 bg-cyan-500/10 text-cyan-100">Approval Type: {formatApprovalType(approval.approvalType)}</Badge>
+          </div>
+          <dl className="grid grid-cols-1 gap-3 text-xs sm:grid-cols-2">
+            <ApprovalMetadataItem label="Task ID" value={approval.taskId} />
+            <ApprovalMetadataItem label="Approval ID" value={approval.approvalId} />
+            <ApprovalMetadataItem label="Status" value={approval.status} />
+            <ApprovalMetadataItem label="Approval Reason" value={approval.reason} wide />
+          </dl>
+          {reviewHref ? (
+            <a
+              className="mt-4 inline-flex h-8 items-center gap-2 rounded-md border border-cyan-400/30 px-3 text-xs font-medium text-cyan-200 hover:bg-cyan-500/10 hover:text-cyan-100"
+              href={reviewHref}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <ExternalLink className="w-3 h-3" />
+              Open Approval Inbox
+            </a>
+          ) : null}
+        </div>
+        <div className="rounded-lg border border-white/10 bg-[#0f1623] p-4" data-testid="workorder-runtime-approval-safety-boundary">
+          <p className="text-[11px] font-medium uppercase text-slate-500">Safety Boundary</p>
+          <ul className="mt-3 space-y-2 text-xs text-slate-300">
+            {safetyBoundary.map((item) => (
+              <li key={item} className="flex items-start gap-2">
+                <CheckCircle className="mt-0.5 h-3 w-3 flex-shrink-0 text-emerald-300" />
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </RuntimeWorkspaceSection>
+  );
+}
+
+function ApprovalMetadataItem({ label, value, wide = false }: { label: string; value?: string; wide?: boolean }) {
+  return (
+    <div className={wide ? 'sm:col-span-2' : undefined}>
+      <dt className="text-slate-500">{label}</dt>
+      <dd className="mt-1 break-words text-slate-200">{value ?? 'not provided'}</dd>
+    </div>
   );
 }
 
@@ -1279,11 +1447,26 @@ function getMetadataText(metadata: Record<string, unknown> | undefined, key: str
   return typeof value === 'string' ? value : undefined;
 }
 
+function optionalDisplayText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
 function normalizeRuntimeDisplayValue(value: unknown): string {
   if (value === null || value === undefined) {
     return '';
   }
   return String(value).replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatApprovalType(value: string): string {
+  if (value.toLowerCase() === 'maintenance_rca') {
+    return 'Maintenance RCA';
+  }
+  return normalizeRuntimeDisplayValue(value);
+}
+
+function ensureTrailingSlash(value: string): string {
+  return value.endsWith('/') ? value : `${value}/`;
 }
 
 function getSeverityBadgeClassName(severity: string): string {

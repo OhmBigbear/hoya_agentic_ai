@@ -74,6 +74,18 @@ export function createMaintenanceRouter({ workorderService, analyticsService }) 
         return sendEnvelope(response, result.data, result);
       }
 
+      if (match.name === 'rcaEvidence') {
+        if (!query.workorder_no?.trim()) {
+          return sendError(response, 400, 'RCA_WORKORDER_REQUIRED', 'workorder_no is required for RCA evidence.');
+        }
+        const evidence = await analyticsService.getRcaEvidence(query);
+        if (!evidence) {
+          return sendError(response, 404, 'WORKORDER_NOT_FOUND', 'Maintenance workorder was not found.');
+        }
+        const { warnings, ...data } = evidence;
+        return sendEnvelope(response, data, { warnings });
+      }
+
       if (match.name === 'failureFrequency') {
         const result = await analyticsService.listFailureFrequency(query);
         return sendEnvelope(response, result.data, result);
@@ -123,6 +135,9 @@ export function matchRoute(pathname) {
   }
   if (pathname === '/api/maintenance/analytics/repeat-failures') {
     return { name: 'repeatFailures', params: {} };
+  }
+  if (pathname === '/api/maintenance/analytics/rca-evidence') {
+    return { name: 'rcaEvidence', params: {} };
   }
   if (pathname === '/api/maintenance/analytics/failure-frequency') {
     return { name: 'failureFrequency', params: {} };

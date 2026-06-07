@@ -1,4 +1,4 @@
-import { addDateWindow, buildWhereClause, listResult, parsePagination } from './queryHelpers.mjs';
+import { addDateWindow, buildWhereClause, listResult, parseBoundedLimit, parsePagination } from './queryHelpers.mjs';
 
 const WORKORDER_FILTERS = {
   site: { column: 'site' },
@@ -33,6 +33,11 @@ export function createMaintenanceWorkorderRepository(db) {
          LIMIT 1`,
         [workorderNo],
       );
+      return result.rows[0] ?? null;
+    },
+
+    async getRcaWorkorderBase(workorderNo) {
+      const result = await db.query(buildRcaWorkorderBaseQuery().text, [workorderNo]);
       return result.rows[0] ?? null;
     },
 
@@ -91,6 +96,29 @@ export function createMaintenanceWorkorderRepository(db) {
       const result = await db.query(query.text, query.values);
       return listResult(result.rows, query.limit, query.offset);
     },
+
+    async listRcaRelatedHistory(equipmentNo, filters = {}) {
+      const query = buildRcaRelatedHistoryQuery(equipmentNo, filters);
+      const result = await db.query(query.text, query.values);
+      return listResult(result.rows, query.limit, query.offset);
+    },
+  };
+}
+
+export function buildRcaWorkorderBaseQuery() {
+  return {
+    text: `SELECT
+             wo.*,
+             count(DISTINCT task.task_id)::int AS task_count,
+             count(DISTINCT part_tx.part_transaction_id)::int AS part_transaction_count,
+             coalesce(sum(part_tx.tran_qty) FILTER (WHERE upper(part_tx.transaction_type) = 'ISSUE'), 0) AS issued_qty
+           FROM maintenance.work_order wo
+           LEFT JOIN maintenance.work_order_task task ON task.work_order_id = wo.work_order_id
+           LEFT JOIN maintenance.work_order_part_transaction part_tx ON part_tx.work_order_id = wo.work_order_id
+           WHERE wo.workorder_no = $1
+           GROUP BY wo.work_order_id
+           LIMIT 1`,
+    values: [],
   };
 }
 
@@ -163,5 +191,28 @@ export function buildEquipmentHistoryQuery(equipmentNo, filters = {}) {
     values: finalValues,
     limit,
     offset,
+  };
+}
+
+export function buildRcaRelatedHistoryQuery(equipmentNo, filters = {}) {
+  const limit = parseBoundedLimit(filters.history_limit ?? filters.limit, 10, 50);
+  const predicates = ['equipment_no = $1'];
+  const values = [equipmentNo];
+  addDateWindow(predicates, values, 'coalesce(act_work_start, plan_start)', filters.from, filters.to);
+  if (filters.exclude_workorder_no) {
+    values.push(filters.exclude_workorder_no);
+    predicates.push(`workorder_no <> $${values.length}`);
+  }
+  values.push(limit);
+
+  return {
+    text: `SELECT *, count(*) OVER() AS __total
+           FROM maintenance.v_machine_maintenance_history
+           WHERE ${predicates.join(' AND ')}
+           ORDER BY coalesce(act_work_start, plan_start) DESC NULLS LAST, workorder_no
+           LIMIT $${values.length} OFFSET 0`,
+    values,
+    limit,
+    offset: 0,
   };
 }
