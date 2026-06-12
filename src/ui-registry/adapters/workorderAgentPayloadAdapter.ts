@@ -7,6 +7,7 @@ import type {
 } from '../../types/operationsWorkspace';
 import type {
   UiEvidenceRef,
+  UiNarrativePanelWidget,
   UiReadonlyActionListWidget,
   UiTraceRef,
   UiTrendChartWidget,
@@ -60,6 +61,7 @@ export interface WorkorderAgentRuntimeEnvelope {
   widgets?: unknown[];
   readonly_actions?: unknown[];
   diagnostics?: unknown[];
+  narrative?: unknown;
   trace?: WorkorderRuntimeTraceMetadata;
   trace_metadata?: WorkorderRuntimeTraceMetadata;
 }
@@ -74,6 +76,7 @@ export interface NormalizedWorkorderAgentPayload {
   charts: WorkspacePayloadChart[];
   recommendations: WorkspacePayloadRecommendation[];
   evidence: WorkspacePayloadEvidence[];
+  narrative?: WorkorderAgentNarrative;
   actions: AgentReadonlyActionValidation[];
   filters?: Record<string, unknown>;
   workorderRows: WorkorderTableRow[];
@@ -91,6 +94,17 @@ export interface NormalizedWorkorderAgentPayload {
 
 type WorkorderTableRow = Record<string, string | number | boolean | null>;
 type RuntimeWidgetType = 'workorder_summary' | 'workorder_table' | 'workorder_list' | 'workorder_status_insight' | 'workorder_insight';
+
+export interface WorkorderAgentNarrative {
+  executiveSummary?: string;
+  keyFindings: string[];
+  reasoning: string[];
+  risks: string[];
+  businessImpact?: string;
+  recommendedNextSteps: string[];
+  evidence: string[];
+  confidence?: string | number | null;
+}
 
 const regionIds = new Set<string>(maintenanceWorkordersRegionIds);
 const supportedRuntimeWidgetPayloadVersion = '1.0';
@@ -133,6 +147,7 @@ export function isWorkorderAgentPayloadLike(payload: unknown): payload is Workor
     || candidate.widgets
     || candidate.readonly_actions
     || candidate.diagnostics
+    || candidate.narrative
     || candidate.trace_metadata
     || candidate.summary
     || candidate.kpi_cards
@@ -184,6 +199,7 @@ export function normalizeWorkorderAgentPayload(payload: unknown): NormalizedWork
       ...normalizeArray(record.insights, normalizeRecommendation),
     ],
     evidence: normalizeArray(record.evidence, normalizeEvidence),
+    narrative: normalizeNarrative(record.narrative ?? root?.narrative),
     actions: validateAgentReadonlyActions([
       ...normalizeRecordArray(record.readonly_actions),
       ...normalizeRecordArray(record.actions),
@@ -280,6 +296,25 @@ export function adaptWorkorderAgentPayloadToWidgets(
           relatedRefs: item.related_refs,
         },
       })),
+      traceRefs,
+      evidenceRefs,
+    });
+  }
+
+  if (normalized.narrative) {
+    widgets.push({
+      id: widgetId('narrative'),
+      type: 'narrative_panel',
+      regionId: 'maintenance.workorders.copilot',
+      title: 'Agent narrative',
+      executiveSummary: normalized.narrative.executiveSummary,
+      keyFindings: normalized.narrative.keyFindings,
+      reasoning: normalized.narrative.reasoning,
+      risks: normalized.narrative.risks,
+      businessImpact: normalized.narrative.businessImpact,
+      recommendedNextSteps: normalized.narrative.recommendedNextSteps,
+      evidence: normalized.narrative.evidence,
+      confidence: normalized.narrative.confidence,
       traceRefs,
       evidenceRefs,
     });
@@ -777,6 +812,87 @@ function normalizeEvidenceRefs(value: unknown): UiEvidenceRef[] {
   }).filter((item): item is UiEvidenceRef => item !== null);
 }
 
+function normalizeNarrative(value: unknown): WorkorderAgentNarrative | undefined {
+  const record = getRecord(value);
+  if (!record) {
+    return undefined;
+  }
+
+  const narrative: WorkorderAgentNarrative = {
+    executiveSummary: getText(record.executive_summary ?? record.executiveSummary ?? record.summary),
+    keyFindings: normalizeNarrativeTextItems(record.key_findings ?? record.keyFindings ?? record.findings),
+    reasoning: normalizeNarrativeTextItems(record.reasoning ?? record.reasoning_steps ?? record.reasoningSteps),
+    risks: normalizeNarrativeTextItems(record.risks ?? record.risk),
+    businessImpact: getText(record.business_impact ?? record.businessImpact ?? record.impact),
+    recommendedNextSteps: normalizeNarrativeTextItems(
+      record.recommended_next_steps
+        ?? record.recommendedNextSteps
+        ?? record.next_steps
+        ?? record.nextSteps
+        ?? record.recommendations,
+    ),
+    evidence: normalizeNarrativeTextItems(record.evidence ?? record.evidence_refs ?? record.evidenceRefs),
+    confidence: getNarrativeConfidence(record.confidence),
+  };
+
+  return hasNarrativeContent(narrative) ? narrative : undefined;
+}
+
+function normalizeNarrativeTextItems(value: unknown): string[] {
+  const text = getText(value);
+  if (text) {
+    return [text];
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      const scalarText = getText(item);
+      if (scalarText) {
+        return scalarText;
+      }
+
+      const record = getRecord(item);
+      return getText(
+        record?.text
+          ?? record?.summary
+          ?? record?.description
+          ?? record?.title
+          ?? record?.label
+          ?? record?.reference
+          ?? record?.id,
+      );
+    }).filter((item): item is string => Boolean(item));
+  }
+
+  const record = getRecord(value);
+  if (record) {
+    return Object.entries(record).map(([key, itemValue]) => {
+      const textValue = getText(itemValue);
+      return textValue ? `${labelFromField(key)}: ${textValue}` : undefined;
+    }).filter((item): item is string => Boolean(item));
+  }
+
+  return [];
+}
+
+function getNarrativeConfidence(value: unknown): string | number | null | undefined {
+  const scalar = getScalar(value);
+  return typeof scalar === 'boolean' ? undefined : scalar;
+}
+
+function hasNarrativeContent(narrative: WorkorderAgentNarrative): boolean {
+  return Boolean(
+    narrative.executiveSummary
+    || narrative.businessImpact
+    || narrative.confidence !== undefined
+    || narrative.keyFindings.length
+    || narrative.reasoning.length
+    || narrative.risks.length
+    || narrative.recommendedNextSteps.length
+    || narrative.evidence.length,
+  );
+}
+
 function normalizeReadonlyActions(
   actions: AgentReadonlyActionValidation[],
 ): NonNullable<UiReadonlyActionListWidget['actions']> {
@@ -932,6 +1048,8 @@ function isWidgetTypeAllowedInRegion(type: UiWidget['type'], regionId: string): 
       return type === 'trend_chart' || type === 'summary_card' || type === 'empty_state' || type === 'error_state';
     case insightsRegion:
       return type === 'insight_list' || type === 'empty_state' || type === 'error_state';
+    case 'maintenance.workorders.copilot':
+      return type === 'narrative_panel' || type === 'insight_list' || type === 'summary_card' || type === 'empty_state' || type === 'error_state';
     case evidenceRegion:
       return type === 'evidence_list' || type === 'empty_state' || type === 'error_state';
     case actionsRegion:

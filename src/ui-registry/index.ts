@@ -30,6 +30,7 @@ export type {
   UiEvidenceRef,
   UiInsightListWidget,
   UiKpiCardWidget,
+  UiNarrativePanelWidget,
   UiReadonlyActionListWidget,
   UiRegionDefinition,
   UiRegionId,
@@ -96,6 +97,7 @@ export {
 } from './adapters/workorderAgentPayloadAdapter';
 export type {
   NormalizedWorkorderAgentPayload,
+  WorkorderAgentNarrative,
   WorkorderAgentPayloadAdapterOptions,
   WorkorderAgentRuntimeEnvelope,
   WorkorderRuntimeDiagnostic,

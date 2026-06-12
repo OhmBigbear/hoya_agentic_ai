@@ -16,6 +16,7 @@ import type {
   UiEvidenceRef,
   UiInsightListWidget,
   UiKpiCardWidget,
+  UiNarrativePanelWidget,
   UiReadonlyActionListWidget,
   UiSummaryCardWidget,
   UiSurfaceDefinition,
@@ -67,6 +68,8 @@ export function renderUiWidget(
       return renderKpiCard(typedWidget, warnings);
     case 'summary_card':
       return renderSummaryCard(typedWidget, warnings);
+    case 'narrative_panel':
+      return renderNarrativePanel(typedWidget, warnings);
     case 'data_table':
       return renderDataTable(typedWidget, warnings);
     case 'trend_chart':
@@ -147,6 +150,66 @@ function renderSummaryCard(widget: UiSummaryCardWidget, warnings: UiValidationIs
         </dl>
       ) : null}
       <WidgetValidationMessages messages={warnings} />
+    </section>
+  );
+}
+
+function renderNarrativePanel(widget: UiNarrativePanelWidget, warnings: UiValidationIssue[]): React.ReactElement {
+  const secondarySections = [
+    { title: 'Risks', items: widget.risks },
+    { title: 'Evidence', items: widget.evidence },
+    { title: 'Reasoning', items: widget.reasoning },
+  ];
+
+  return (
+    <section aria-label={widget.title ?? 'Narrative'} data-widget-id={widget.id}>
+      <h3>{widget.title ?? 'Narrative'}</h3>
+      {widget.description ? <p>{widget.description}</p> : null}
+      {widget.executiveSummary ? (
+        <section aria-label="Executive Summary">
+          <h4>Executive Summary</h4>
+          <p>{widget.executiveSummary}</p>
+        </section>
+      ) : null}
+      {renderNarrativeListSection('Key Findings', widget.keyFindings)}
+      {widget.businessImpact ? (
+        <section aria-label="Business Impact">
+          <h4>Business Impact</h4>
+          <p>{widget.businessImpact}</p>
+        </section>
+      ) : null}
+      {renderNarrativeListSection('Recommended Next Steps', widget.recommendedNextSteps)}
+      {secondarySections.some((section) => section.items?.length) ? (
+        <details>
+          <summary>Additional narrative detail</summary>
+          {secondarySections.map((section) => (
+            <React.Fragment key={section.title}>
+              {renderNarrativeListSection(section.title, section.items)}
+            </React.Fragment>
+          ))}
+        </details>
+      ) : null}
+      {widget.confidence !== undefined ? (
+        <p>
+          <strong>Confidence</strong>: {formatValue(widget.confidence)}
+        </p>
+      ) : null}
+      <WidgetValidationMessages messages={warnings} />
+    </section>
+  );
+}
+
+function renderNarrativeListSection(title: string, items?: string[]): React.ReactElement | null {
+  if (!items?.length) {
+    return null;
+  }
+
+  return (
+    <section aria-label={title}>
+      <h4>{title}</h4>
+      <ul>
+        {items.map((item, index) => <li key={`${title}-${index}`}>{item}</li>)}
+      </ul>
     </section>
   );
 }

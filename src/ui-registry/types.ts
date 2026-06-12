@@ -6,6 +6,7 @@ export type UiActionTargetId = string;
 export type UiWidgetType =
   | 'kpi_card'
   | 'summary_card'
+  | 'narrative_panel'
   | 'data_table'
   | 'trend_chart'
   | 'insight_list'
@@ -54,6 +55,18 @@ export interface UiSummaryCardWidget extends UiWidgetBase {
     label: string;
     value: string | number | null;
   }>;
+}
+
+export interface UiNarrativePanelWidget extends UiWidgetBase {
+  type: 'narrative_panel';
+  executiveSummary?: string;
+  keyFindings?: string[];
+  reasoning?: string[];
+  risks?: string[];
+  businessImpact?: string;
+  recommendedNextSteps?: string[];
+  evidence?: string[];
+  confidence?: string | number | null;
 }
 
 export interface UiDataTableWidget extends UiWidgetBase {
@@ -121,6 +134,7 @@ export interface UiErrorStateWidget extends UiWidgetBase {
 export type UiWidget =
   | UiKpiCardWidget
   | UiSummaryCardWidget
+  | UiNarrativePanelWidget
   | UiDataTableWidget
   | UiTrendChartWidget
   | UiInsightListWidget

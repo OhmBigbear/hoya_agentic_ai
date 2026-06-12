@@ -548,6 +548,7 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
     });
 
     const context: WorkorderAgentRuntimeRequest['context'] = {
+      include_narrative: true,
       filters: buildOperationsWorkspacePreviewFilters(filters, operationsWorkspace.state, selectedWorkorder),
       workspace_state: {
         selected_workorder_id: operationsWorkspace.state.selectedWorkorderId,

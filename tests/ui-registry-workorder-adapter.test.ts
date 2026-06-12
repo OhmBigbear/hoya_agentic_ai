@@ -46,6 +46,7 @@ const basePayload = {
 const allowedWidgetTypes = new Set([
   'kpi_card',
   'summary_card',
+  'narrative_panel',
   'data_table',
   'trend_chart',
   'insight_list',
@@ -391,6 +392,7 @@ describe('workorder agent payload adapter', () => {
       payload_version: '2.0',
     });
     expect(normalized.runtimeWidgets).toHaveLength(3);
+    expect(normalized.narrative).toBeUndefined();
     expect(normalized.actions.filter((action) => action.valid).map((action) => action.actionId)).toEqual([
       'view_workorder',
       'view_machine',
@@ -400,6 +402,75 @@ describe('workorder agent payload adapter', () => {
     expect(widgets.some((widget) => widget.id === 'runtime-open-workorders')).toBe(true);
     expect(widgets.some((widget) => widget.id === 'runtime-workorder-table')).toBe(true);
     expect(widgets.some((widget) => widget.id === 'runtime-status-insight')).toBe(true);
+    expect(widgets.some((widget) => widget.type === 'narrative_panel')).toBe(false);
+    assertAllWidgetsValid(widgets);
+  });
+
+  it('maps optional runtime narrative into a narrative_panel widget', () => {
+    const payload = {
+      ...runtimeWorkorderAgentResponse,
+      narrative: {
+        executive_summary: 'POLISHING-7A is the current maintenance blocker.',
+        key_findings: [
+          'Two high-priority workorders remain open.',
+          { summary: 'Bearing stock is near minimum.' },
+        ],
+        reasoning: 'Open corrective work and stock signals overlap on the same equipment.',
+        risks: ['Unplanned downtime could extend into the next shift.'],
+        business_impact: 'Production throughput is exposed while the corrective queue remains open.',
+        recommended_next_steps: [
+          'Review WO-RUNTIME-100 with the maintenance lead.',
+          { title: 'Confirm bearing availability before release.' },
+        ],
+        evidence: [
+          'runtime workorder query',
+          { reference: 'runtime-status-open' },
+        ],
+        confidence: 'high',
+      },
+    };
+    const normalized = normalizeWorkorderAgentPayload(payload);
+    const widgets = adaptWorkorderAgentPayloadToWidgets(payload);
+    const narrativeWidget = widgets.find((widget): widget is Extract<UiWidget, { type: 'narrative_panel' }> => widget.type === 'narrative_panel');
+
+    expect(normalized.narrative).toMatchObject({
+      executiveSummary: 'POLISHING-7A is the current maintenance blocker.',
+      keyFindings: ['Two high-priority workorders remain open.', 'Bearing stock is near minimum.'],
+      reasoning: ['Open corrective work and stock signals overlap on the same equipment.'],
+      risks: ['Unplanned downtime could extend into the next shift.'],
+      businessImpact: 'Production throughput is exposed while the corrective queue remains open.',
+      recommendedNextSteps: ['Review WO-RUNTIME-100 with the maintenance lead.', 'Confirm bearing availability before release.'],
+      evidence: ['runtime workorder query', 'runtime-status-open'],
+      confidence: 'high',
+    });
+    expect(narrativeWidget).toMatchObject({
+      id: 'maintenance.workorders.adapter.narrative',
+      regionId: 'maintenance.workorders.copilot',
+      title: 'Agent narrative',
+      executiveSummary: 'POLISHING-7A is the current maintenance blocker.',
+    });
+    assertAllWidgetsValid(widgets);
+  });
+
+  it('keeps missing narrative sections safe', () => {
+    const widgets = adaptWorkorderAgentPayloadToWidgets({
+      ...runtimeWorkorderAgentResponse,
+      narrative: {
+        executive_summary: 'Only the executive summary is available.',
+        confidence: 0.71,
+      },
+    });
+    const narrativeWidget = widgets.find((widget): widget is Extract<UiWidget, { type: 'narrative_panel' }> => widget.type === 'narrative_panel');
+
+    expect(narrativeWidget).toMatchObject({
+      executiveSummary: 'Only the executive summary is available.',
+      keyFindings: [],
+      reasoning: [],
+      risks: [],
+      recommendedNextSteps: [],
+      evidence: [],
+      confidence: 0.71,
+    });
     assertAllWidgetsValid(widgets);
   });
 

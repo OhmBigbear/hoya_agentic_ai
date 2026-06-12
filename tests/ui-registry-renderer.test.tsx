@@ -50,6 +50,49 @@ describe('ui registry widget renderer', () => {
     expect(markup).toContain('3');
   });
 
+  it('renders narrative_panel with compact default and expandable detail sections', () => {
+    const markup = render(widget({
+      id: 'narrative',
+      type: 'narrative_panel',
+      regionId: regions[6],
+      title: 'Agent narrative',
+      executiveSummary: 'The open corrective queue is concentrated on POLISHING-7A.',
+      keyFindings: ['Two high-priority workorders are open.'],
+      businessImpact: 'The line has elevated downtime exposure.',
+      recommendedNextSteps: ['Review WO-RUNTIME-100 with the maintenance lead.'],
+      risks: ['Downtime could extend into the next shift.'],
+      evidence: ['runtime workorder query'],
+      reasoning: ['The same equipment appears in workorder and spare-part signals.'],
+      confidence: 'high',
+    }));
+
+    expect(markup).toContain('Agent narrative');
+    expect(markup).toContain('Executive Summary');
+    expect(markup).toContain('Key Findings');
+    expect(markup).toContain('Business Impact');
+    expect(markup).toContain('Recommended Next Steps');
+    expect(markup).toContain('<summary>Additional narrative detail</summary>');
+    expect(markup).toContain('Risks');
+    expect(markup).toContain('Evidence');
+    expect(markup).toContain('Reasoning');
+    expect(markup).toContain('Confidence');
+    expect(markup).toContain('high');
+  });
+
+  it('renders narrative_panel when optional sections are missing', () => {
+    const markup = render(widget({
+      id: 'narrative-partial',
+      type: 'narrative_panel',
+      regionId: regions[6],
+      title: 'Agent narrative',
+      executiveSummary: 'Only summary text is available.',
+    }));
+
+    expect(markup).toContain('Only summary text is available.');
+    expect(markup).not.toContain('Additional narrative detail');
+    expect(markup).not.toContain('Key Findings');
+  });
+
   it('renders data_table', () => {
     const markup = render(widget({
       id: 'workorder-table',

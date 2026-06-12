@@ -11,6 +11,7 @@ import type {
 const SUPPORTED_WIDGET_TYPES: ReadonlySet<UiWidgetType> = new Set([
   'kpi_card',
   'summary_card',
+  'narrative_panel',
   'data_table',
   'trend_chart',
   'insight_list',

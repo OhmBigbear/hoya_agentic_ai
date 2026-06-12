@@ -42,6 +42,7 @@ export interface WorkorderRuntimeResponseEnvelope {
   payload_version: string;
   trace_metadata: WorkorderRuntimeTraceMetadata;
   summary?: unknown;
+  narrative?: unknown;
   widgets: unknown[];
   readonly_actions: unknown[];
   diagnostics: unknown[];
@@ -137,6 +138,7 @@ export function parseWorkorderRuntimeResponse(
       Array.isArray(record.widgets)
       || Array.isArray(record.readonly_actions)
       || record.summary
+      || record.narrative
       || Array.isArray(record.diagnostics)
     )
   );
@@ -147,6 +149,7 @@ export function parseWorkorderRuntimeResponse(
     && optionalText(workspacePayload.intent) === 'workorder_insight'
     && (
       workspacePayload.summary
+      || workspacePayload.narrative
       || Array.isArray(workspacePayload.recommendations)
       || Array.isArray(workspacePayload.evidence)
       || Array.isArray(workspacePayload.kpi_cards)

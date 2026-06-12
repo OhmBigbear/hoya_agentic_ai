@@ -50,6 +50,7 @@ describe('workorder widget developer preview', () => {
     expect(envSource).toContain("return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';");
     expect(source).toContain('WORKORDER_WIDGET_SHADOW_MODE_ENABLED && WORKORDER_WIDGET_DEV_PREVIEW_ENABLED');
     expect(source).toContain('WORKORDER_AGENT_RUNTIME_PREVIEW_ENABLED && WORKORDER_WIDGET_DEV_PREVIEW_ENABLED');
+    expect(source).toContain('include_narrative: true');
   });
 
   it('does not render the developer preview by default and keeps existing assistant output', () => {

@@ -58,7 +58,7 @@ export const maintenanceWorkordersSurface: UiSurfaceDefinition = {
     {
       id: 'maintenance.workorders.copilot',
       label: 'Copilot',
-      allowedWidgetTypes: ['insight_list', 'summary_card', 'empty_state', 'error_state'],
+      allowedWidgetTypes: ['narrative_panel', 'insight_list', 'summary_card', 'empty_state', 'error_state'],
     },
     {
       id: 'maintenance.workorders.evidence',
