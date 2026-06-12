@@ -63,14 +63,17 @@ export async function requestWorkorderAgentRuntime(
   const endpoint = resolveWorkorderAgentRuntimeEndpoint(options.baseUrl, options.path, options.endpointUrl);
   const timeoutMs = normalizeWorkorderAgentRuntimeTimeoutMs(options.timeoutMs ?? WORKORDER_AGENT_RUNTIME_TIMEOUT_MS);
   const runtimeRequest = buildWorkorderRuntimeRequest(request);
+  const requestPayloadJson = JSON.stringify(runtimeRequest, null, 2);
   const baseDiagnostics: WorkorderRuntimeContractDiagnostics = {
     endpoint_mode: endpoint.mode,
     endpoint_url: endpoint.url ?? undefined,
     endpoint_path: endpoint.path,
     timeout_ms: timeoutMs,
+    request_url: endpoint.url ?? undefined,
+    request_payload: requestPayloadJson,
     request_source: runtimeRequest.request_source,
-    client_trace_id: runtimeRequest.client_trace_id,
-    payload_version: runtimeRequest.payload_version,
+    client_trace_id: request.client_trace_id,
+    payload_version: request.payload_version,
   };
 
   if (!endpoint.url) {
@@ -100,19 +103,23 @@ export async function requestWorkorderAgentRuntime(
       body: JSON.stringify(runtimeRequest),
       signal: controller.signal,
     });
-    const payload = await parseRuntimeJsonResponse(response);
+    const { payload, responseBody } = await parseRuntimeJsonResponse(response);
     const completedAt = now();
 
     if (!response.ok) {
       const error = parseWorkorderRuntimeError(payload, `Workorder Agent runtime request failed with ${response.status} ${response.statusText}`);
+      const isRejectedRequest = response.status === 400;
       return runtimeFailure(
         'error',
-        error.error_code,
-        error.message,
+        isRejectedRequest ? 'runtime_request_rejected' : error.error_code,
+        isRejectedRequest ? 'Runtime request rejected' : error.message,
         {
           ...baseDiagnostics,
           runtime_trace_id: error.trace_id,
-          error_code: error.error_code,
+          error_code: isRejectedRequest ? 'runtime_request_rejected' : error.error_code,
+          response_status: response.status,
+          http_status: response.status,
+          response_body: responseBody,
         },
         requestedAt,
         completedAt,
@@ -128,7 +135,12 @@ export async function requestWorkorderAgentRuntime(
         requestedAt,
         completedAt,
         payload: parsed.payload,
-        diagnostics: parsed.diagnostics,
+        diagnostics: {
+          ...parsed.diagnostics,
+          response_status: response.status,
+          http_status: response.status,
+          response_body: responseBody,
+        },
       };
     }
 
@@ -217,16 +229,16 @@ export function normalizeWorkorderAgentRuntimeTimeoutMs(value: unknown): number 
   return 10000;
 }
 
-async function parseRuntimeJsonResponse(response: Response): Promise<unknown> {
+async function parseRuntimeJsonResponse(response: Response): Promise<{ payload: unknown; responseBody: string }> {
   const text = await response.text();
   if (!text) {
-    return {};
+    return { payload: {}, responseBody: '' };
   }
 
   try {
-    return JSON.parse(text);
+    return { payload: JSON.parse(text), responseBody: text };
   } catch {
-    return { error: { message: text } };
+    return { payload: { error: { message: text } }, responseBody: text };
   }
 }
 

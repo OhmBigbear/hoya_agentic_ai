@@ -23,7 +23,7 @@ describe('workorder runtime preview wiring', () => {
     vi.resetModules();
   });
 
-  it('renders standalone idle diagnostics without a workspace payload when preview flags are enabled', async () => {
+  it('renders idle diagnostics inside the default-collapsed developer details area when preview flags are enabled', async () => {
     vi.stubEnv('VITE_WORKORDER_WIDGET_DEV_PREVIEW_ENABLED', 'true');
     vi.stubEnv('VITE_WORKORDER_AGENT_RUNTIME_PREVIEW_ENABLED', 'true');
     vi.resetModules();
@@ -46,6 +46,9 @@ describe('workorder runtime preview wiring', () => {
       />,
     );
 
+    expect(markup).toContain('Diagnostics / Developer details');
+    expect(markup).toContain('data-testid="maintenance-copilot-diagnostics"');
+    expect(markup).not.toMatch(/<details[^>]*data-testid="maintenance-copilot-diagnostics"[^>]*open/);
     expect(markup).toContain('data-testid="runtime-preview-diagnostics"');
     expect(markup).toContain('Runtime fetch');
     expect(markup).toContain('status idle source fixture');

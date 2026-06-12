@@ -1,10 +1,16 @@
 export const workorderRuntimeSmokeRequest = {
   query: 'Summarize current maintenance blockers',
-  selected_workorder_id: 'WO-SMOKE-100',
-  selected_machine_id: 'POLISHING-7A',
+  workorder_no: 'WO-SMOKE-100',
   surface_id: 'maintenance.workorders',
   request_source: 'hoya_ui.contract_smoke',
   context: {
+    include_narrative: true,
+    include_cost_estimate: true,
+    demo_mode: 'cost_intelligence',
+    workspace_state: {
+      selected_workorder_id: 'WO-SMOKE-100',
+      selected_machine_id: 'POLISHING-7A',
+    },
     filters: { status: 'open' },
   },
   client_trace_id: 'client-trace-smoke-022',

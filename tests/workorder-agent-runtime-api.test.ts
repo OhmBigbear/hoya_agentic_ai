@@ -34,11 +34,14 @@ import {
 
 const runtimeRequest = {
   query: 'show maintenance blockers',
-  selected_workorder_id: 'WO-100',
-  selected_machine_id: 'MACHINE-7A',
+  workorder_no: 'WO-100',
   surface_id: 'maintenance.workorders',
   request_source: 'hoya_ui.developer_diagnostics',
   context: {
+    workspace_state: {
+      selected_workorder_id: 'WO-100',
+      selected_machine_id: 'MACHINE-7A',
+    },
     filters: { status: 'open' },
   },
   client_trace_id: 'client-trace-021-b09',
@@ -127,7 +130,23 @@ describe('workorder agent runtime API', () => {
         'Content-Type': 'application/json',
       },
     });
-    expect(JSON.parse(String(fetchImpl.mock.calls[0][1].body))).toEqual(runtimeRequest);
+    expect(JSON.parse(String(fetchImpl.mock.calls[0][1].body))).toEqual({
+      query: 'show maintenance blockers',
+      workorder_no: 'WO-100',
+      surface_id: 'maintenance.workorders',
+      request_source: 'hoya_ui.developer_diagnostics',
+      context: {
+        workspace_state: {
+          selected_workorder_id: 'WO-100',
+          selected_machine_id: 'MACHINE-7A',
+        },
+        filters: { status: 'open' },
+      },
+    });
+    expect(JSON.parse(String(fetchImpl.mock.calls[0][1].body))).not.toHaveProperty('selected_workorder_id');
+    expect(JSON.parse(String(fetchImpl.mock.calls[0][1].body))).not.toHaveProperty('selected_machine_id');
+    expect(JSON.parse(String(fetchImpl.mock.calls[0][1].body))).not.toHaveProperty('client_trace_id');
+    expect(JSON.parse(String(fetchImpl.mock.calls[0][1].body))).not.toHaveProperty('payload_version');
   });
 
   it('keeps B0.8 request aliases backward compatible', async () => {
@@ -135,15 +154,16 @@ describe('workorder agent runtime API', () => {
 
     expect(request).toEqual({
       query: 'show maintenance blockers',
-      selected_workorder_id: 'WO-100',
-      selected_machine_id: 'MACHINE-7A',
+      workorder_no: 'WO-100',
       surface_id: 'maintenance.workorders',
       request_source: 'hoya_ui.developer_diagnostics',
       context: {
         filters: { status: 'open' },
+        workspace_state: {
+          selected_workorder_id: 'WO-100',
+          selected_machine_id: 'MACHINE-7A',
+        },
       },
-      client_trace_id: 'legacy-client-trace',
-      payload_version: '1.0',
     });
   });
 
@@ -158,11 +178,21 @@ describe('workorder agent runtime API', () => {
       request_source: 'hoya_ui.rca_approval_request',
     }, () => 'approval-trace');
 
-    expect(defaultRequest.context).toEqual({ filters: { status: 'open' } });
+    expect(defaultRequest.context).toEqual({
+      filters: { status: 'open' },
+      workspace_state: {
+        selected_workorder_id: 'WO-100',
+        selected_machine_id: 'MACHINE-7A',
+      },
+    });
     expect(defaultRequest.context).not.toHaveProperty('create_approval_request');
     expect(approvalRequest.context).toMatchObject({
       filters: { status: 'open' },
       create_approval_request: true,
+      workspace_state: {
+        selected_workorder_id: 'WO-100',
+        selected_machine_id: 'MACHINE-7A',
+      },
     });
     expect(approvalRequest.request_source).toBe('hoya_ui.rca_approval_request');
   });
@@ -282,7 +312,7 @@ describe('workorder agent runtime API', () => {
     });
     expect(result.diagnostics).toMatchObject({
       endpoint_mode: 'disabled',
-      endpoint_path: '/api/workorder-agent/runtime',
+      endpoint_path: '/api/runtime/workorder-agent',
       timeout_ms: 10000,
       request_source: 'hoya_ui.developer_diagnostics',
       client_trace_id: 'client-trace-021-b09',
@@ -342,6 +372,45 @@ describe('workorder agent runtime API', () => {
       endpoint_mode: 'base_url_path',
       runtime_trace_id: 'trace-error-021',
       error_code: 'agent_unavailable',
+    });
+  });
+
+  it('handles 400 responses as rejected runtime requests with response body diagnostics', async () => {
+    const rejectedBody = {
+      detail: [
+        {
+          loc: ['body', 'selected_workorder_id'],
+          msg: 'extra fields not permitted',
+          type: 'value_error.extra',
+        },
+      ],
+    };
+    const result = await requestWorkorderAgentRuntime(runtimeRequest, {
+      baseUrl: 'https://agentic-core.example.com',
+      path: '/api/runtime/workorder-agent',
+      fetchImpl: vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(rejectedBody), { status: 400, statusText: 'Bad Request' }),
+      ),
+      now: fixedClock(),
+    });
+
+    expect(result).toMatchObject({
+      status: 'error',
+      source: 'fallback',
+      errorReason: 'Runtime request rejected',
+    });
+    expect(result.diagnostics).toMatchObject({
+      endpoint_path: '/api/runtime/workorder-agent',
+      request_url: 'https://agentic-core.example.com/api/runtime/workorder-agent',
+      request_payload: JSON.stringify(buildWorkorderRuntimeRequest(runtimeRequest), null, 2),
+      error_code: 'runtime_request_rejected',
+      response_status: 400,
+      http_status: 400,
+      response_body: JSON.stringify(rejectedBody),
+    });
+    expect(buildWorkorderWidgetPreviewModel(result.payload).diagnostics.runtimeDiagnostics[0]).toMatchObject({
+      code: 'runtime_request_rejected',
+      message: 'Runtime request rejected',
     });
   });
 
@@ -406,7 +475,22 @@ describe('workorder agent runtime API', () => {
     });
 
     expect(fetchImpl.mock.calls[0][0]).toBe('https://agentic-core.example.com/custom/runtime');
-    expect(JSON.parse(String(fetchImpl.mock.calls[0][1].body))).toEqual(workorderRuntimeSmokeRequest);
+    expect(JSON.parse(String(fetchImpl.mock.calls[0][1].body))).toEqual({
+      query: 'Summarize current maintenance blockers',
+      workorder_no: 'WO-SMOKE-100',
+      surface_id: 'maintenance.workorders',
+      request_source: 'hoya_ui.contract_smoke',
+      context: {
+        include_narrative: true,
+        include_cost_estimate: true,
+        demo_mode: 'cost_intelligence',
+        workspace_state: {
+          selected_workorder_id: 'WO-SMOKE-100',
+          selected_machine_id: 'POLISHING-7A',
+        },
+        filters: { status: 'open' },
+      },
+    });
     expect(result.status).toBe('success');
     expect(result.diagnostics).toMatchObject({
       endpoint_mode: 'full_url',

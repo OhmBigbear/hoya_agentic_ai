@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import {
   Activity,
   AlertCircle,
@@ -38,6 +38,8 @@ import { Button } from '../../app/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../app/components/ui/card';
 import { Input } from '../../app/components/ui/input';
 import { ScrollArea } from '../../app/components/ui/scroll-area';
+import { Textarea } from '../../app/components/ui/textarea';
+import { CopilotMarkdown } from '../../components/maintenance/CopilotMarkdown';
 import { useOperationsWorkspaceRuntime } from '../../hooks/useOperationsWorkspaceRuntime';
 import {
   getHoldReasonSummary,
@@ -121,9 +123,13 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
+  responseSource?: 'runtime' | 'local_preview';
+  fallbackReason?: string;
+  narrative?: unknown;
   insights?: Insight[];
   uiActions?: UiActionPreview[];
   workspacePayload?: WorkspacePayload;
+  runtimePayload?: unknown;
   actionResults?: ActionResult[];
 }
 
@@ -144,11 +150,16 @@ interface RuntimeFetchDiagnosticsState {
   endpointUrl?: string;
   endpointPath?: string;
   timeoutMs?: number;
+  requestUrl?: string;
+  requestPayload?: string;
   requestSource?: string;
   clientTraceId?: string;
   runtimeTraceId?: string;
   payloadVersion?: string;
   errorCode?: string;
+  responseStatus?: number;
+  httpStatus?: number;
+  responseBody?: string;
 }
 
 export interface WorkorderRuntimeWidgetWorkspaceState {
@@ -260,6 +271,9 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
   const previewRequest = services.requestOperationsWorkspacePreview ?? requestOperationsWorkspacePreview;
   const runtimeRequest = services.requestWorkorderAgentRuntime ?? requestWorkorderAgentRuntime;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const copilotSubmitInFlightRef = useRef(false);
+  const copilotSubmitSequenceRef = useRef(0);
+  const copilotRuntimeSuccessSequenceRef = useRef(0);
   const [, setWorkorderWidgetShadowDiagnostics] = useState<WorkorderWidgetShadowDiagnostics | null>(null);
   const [runtimeFetchDiagnostics, setRuntimeFetchDiagnostics] = useState<RuntimeFetchDiagnosticsState>({
     status: 'idle',
@@ -463,10 +477,13 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
 
   const handleSendMessage = async () => {
     const trimmedMessage = inputMessage.trim();
-    if (!trimmedMessage || isCopilotSending) {
+    if (!trimmedMessage || isCopilotSending || copilotSubmitInFlightRef.current) {
       return;
     }
 
+    copilotSubmitInFlightRef.current = true;
+    const submitSequence = copilotSubmitSequenceRef.current + 1;
+    copilotSubmitSequenceRef.current = submitSequence;
     const timestamp = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
     setInputMessage('');
     setIsCopilotSending(true);
@@ -476,12 +493,50 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
       { id: current.length + 1, role: 'user', content: trimmedMessage, timestamp },
     ]);
 
+    const previewFilters = buildOperationsWorkspacePreviewFilters(filters, operationsWorkspace.state, selectedWorkorder);
+
     try {
-      const preview = await previewRequest({
-        message: trimmedMessage,
-        filters: buildOperationsWorkspacePreviewFilters(filters, operationsWorkspace.state, selectedWorkorder),
-        limit: 5,
+      const response = await requestMaintenanceCopilotAssistantResponse({
+        prompt: trimmedMessage,
+        filters: previewFilters,
+        workspaceState: operationsWorkspace.state,
+        selectedWorkorder,
+        previewRequest,
+        runtimeRequest,
       });
+
+      if (!shouldApplyCopilotSubmitResponse({
+        submitSequence,
+        latestSubmitSequence: copilotSubmitSequenceRef.current,
+        latestRuntimeSuccessSequence: copilotRuntimeSuccessSequenceRef.current,
+        responseSource: response.source,
+      })) {
+        return;
+      }
+
+      if (response.runtimeResult) {
+        applyRuntimeResultToWorkspace(response.runtimeResult);
+      }
+
+      if (response.source === 'runtime') {
+        copilotRuntimeSuccessSequenceRef.current = submitSequence;
+        setMessages((current) => [
+          ...current,
+          {
+            id: current.length + 1,
+            role: 'assistant',
+            content: extractRuntimeAssistantText(response.runtimeResult.payload),
+            timestamp,
+            responseSource: 'runtime',
+            narrative: extractRuntimeNarrative(response.runtimeResult.payload),
+            workspacePayload: extractRuntimeWorkspacePayload(response.runtimeResult.payload),
+            runtimePayload: response.runtimeResult.payload,
+          },
+        ]);
+        return;
+      }
+
+      const preview = response.preview;
       if (WORKORDER_WIDGET_SHADOW_MODE_ENABLED) {
         setWorkorderWidgetShadowDiagnostics(buildWorkorderWidgetShadowDiagnostics(preview.workspace_payload, {
           onError: (shadowError) => {
@@ -507,16 +562,19 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
         {
           id: current.length + 1,
           role: 'assistant',
-          content: preview.assistant_text || 'No assistant summary was returned by Agentic Core.',
+          content: preview.assistant_text || 'No assistant summary was returned by Agentic Core preview.',
           timestamp,
+          responseSource: 'local_preview',
+          fallbackReason: response.fallbackReason,
+          narrative: extractPreviewNarrative(preview),
           insights: preview.insights,
           uiActions: preview.ui_actions,
           workspacePayload: preview.workspace_payload,
           actionResults,
         },
       ]);
-    } catch (previewError) {
-      const errorMessage = previewError instanceof Error ? previewError.message : 'Agentic Core preview request failed.';
+    } catch (copilotRequestError) {
+      const errorMessage = copilotRequestError instanceof Error ? copilotRequestError.message : 'Agentic Core preview request failed.';
       setCopilotError(errorMessage);
       setMessages((current) => [
         ...current,
@@ -528,7 +586,46 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
         },
       ]);
     } finally {
-      setIsCopilotSending(false);
+      if (copilotSubmitSequenceRef.current === submitSequence) {
+        copilotSubmitInFlightRef.current = false;
+        setIsCopilotSending(false);
+      }
+    }
+
+    function applyRuntimeResultToWorkspace(result: WorkorderAgentRuntimeResult) {
+      const nextRuntimeFetchDiagnostics: RuntimeFetchDiagnosticsState = {
+        status: result.status,
+        source: result.source,
+        requestedAt: result.requestedAt,
+        completedAt: result.completedAt,
+        errorReason: result.status === 'success' ? undefined : result.errorReason,
+        payload: result.payload,
+        endpointMode: result.diagnostics.endpoint_mode,
+        endpointUrl: result.diagnostics.endpoint_url,
+        endpointPath: result.diagnostics.endpoint_path,
+        timeoutMs: result.diagnostics.timeout_ms,
+        requestUrl: result.diagnostics.request_url,
+        requestPayload: result.diagnostics.request_payload,
+        requestSource: result.diagnostics.request_source,
+        clientTraceId: result.diagnostics.client_trace_id,
+        runtimeTraceId: result.diagnostics.runtime_trace_id,
+        payloadVersion: result.diagnostics.payload_version,
+        errorCode: result.diagnostics.error_code,
+        responseStatus: result.diagnostics.response_status,
+        httpStatus: result.diagnostics.http_status,
+        responseBody: result.diagnostics.response_body,
+      };
+      setRuntimeFetchDiagnostics(nextRuntimeFetchDiagnostics);
+      setRuntimeWidgetWorkspaceState(buildWorkorderRuntimeWidgetWorkspaceState({
+        payload: result.payload,
+        source: result.source,
+        requestedAt: result.requestedAt,
+        completedAt: result.completedAt,
+        errorReason: result.status === 'success' ? undefined : result.errorReason,
+        runtimeTraceId: result.diagnostics.runtime_trace_id,
+        clientTraceId: result.diagnostics.client_trace_id,
+        payloadVersion: result.diagnostics.payload_version,
+      }));
     }
   };
 
@@ -549,6 +646,8 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
 
     const context: WorkorderAgentRuntimeRequest['context'] = {
       include_narrative: true,
+      include_cost_estimate: true,
+      demo_mode: 'cost_intelligence',
       filters: buildOperationsWorkspacePreviewFilters(filters, operationsWorkspace.state, selectedWorkorder),
       workspace_state: {
         selected_workorder_id: operationsWorkspace.state.selectedWorkorderId,
@@ -565,8 +664,7 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
 
     const result = await runtimeRequest({
       query: question,
-      selected_workorder_id: operationsWorkspace.state.selectedWorkorderId ?? selectedWorkorder?.workorder_no,
-      selected_machine_id: operationsWorkspace.state.selectedMachineId ?? selectedWorkorder?.equipment_no,
+      workorder_no: operationsWorkspace.state.selectedWorkorderId ?? selectedWorkorder?.workorder_no,
       surface_id: maintenanceWorkordersSurfaceId,
       request_source: options.createApprovalRequest ? 'hoya_ui.rca_approval_request' : 'hoya_ui.developer_diagnostics',
       context,
@@ -585,11 +683,16 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
         endpointUrl: result.diagnostics.endpoint_url,
         endpointPath: result.diagnostics.endpoint_path,
         timeoutMs: result.diagnostics.timeout_ms,
+        requestUrl: result.diagnostics.request_url,
+        requestPayload: result.diagnostics.request_payload,
         requestSource: result.diagnostics.request_source,
         clientTraceId: result.diagnostics.client_trace_id,
         runtimeTraceId: result.diagnostics.runtime_trace_id,
         payloadVersion: result.diagnostics.payload_version,
         errorCode: result.diagnostics.error_code,
+        responseStatus: result.diagnostics.response_status,
+        httpStatus: result.diagnostics.http_status,
+        responseBody: result.diagnostics.response_body,
       });
       setRuntimeWidgetWorkspaceState(buildWorkorderRuntimeWidgetWorkspaceState({
         payload: diagnosticPayload,
@@ -615,11 +718,16 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
       endpointUrl: result.diagnostics.endpoint_url,
       endpointPath: result.diagnostics.endpoint_path,
       timeoutMs: result.diagnostics.timeout_ms,
+      requestUrl: result.diagnostics.request_url,
+      requestPayload: result.diagnostics.request_payload,
       requestSource: result.diagnostics.request_source,
       clientTraceId: result.diagnostics.client_trace_id,
       runtimeTraceId: result.diagnostics.runtime_trace_id,
       payloadVersion: result.diagnostics.payload_version,
       errorCode: result.diagnostics.error_code,
+      responseStatus: result.diagnostics.response_status,
+      httpStatus: result.diagnostics.http_status,
+      responseBody: result.diagnostics.response_body,
     };
     setRuntimeFetchDiagnostics(nextRuntimeFetchDiagnostics);
     setRuntimeWidgetWorkspaceState(buildWorkorderRuntimeWidgetWorkspaceState({
@@ -738,6 +846,188 @@ export function buildMaintenanceApiErrorMessage(failures: string[], requestCount
   }
 
   return `Some maintenance data could not be loaded. Showing available API results. ${failures.join(' ')}`;
+}
+
+export const copilotWorkorderNumberPattern = /\b[A-Z]{2,}\d{2}-\d{3,}\b/i;
+
+export interface MaintenanceCopilotRuntimeRoutingContext {
+  prompt: string;
+  filters: Record<string, unknown>;
+  workspaceState: ReturnType<typeof useOperationsWorkspaceRuntime>['state'];
+  selectedWorkorder?: MaintenanceWorkOrder;
+}
+
+export interface MaintenanceCopilotAssistantResponseInput extends MaintenanceCopilotRuntimeRoutingContext {
+  previewRequest: (request: OperationsWorkspacePreviewRequest) => Promise<OperationsWorkspacePreviewResponse>;
+  runtimeRequest: (request: WorkorderAgentRuntimeRequest) => Promise<WorkorderAgentRuntimeResult>;
+}
+
+export type MaintenanceCopilotAssistantResponse =
+  | {
+    source: 'runtime';
+    runtimeRequest: WorkorderAgentRuntimeRequest;
+    runtimeResult: Extract<WorkorderAgentRuntimeResult, { status: 'success' }>;
+  }
+  | {
+    source: 'local_preview';
+    preview: OperationsWorkspacePreviewResponse;
+    fallbackReason: string;
+    runtimeRequest?: WorkorderAgentRuntimeRequest;
+    runtimeResult?: WorkorderAgentRuntimeResult;
+  };
+
+export function shouldApplyCopilotSubmitResponse({
+  submitSequence,
+  latestSubmitSequence,
+  latestRuntimeSuccessSequence,
+  responseSource,
+}: {
+  submitSequence: number;
+  latestSubmitSequence: number;
+  latestRuntimeSuccessSequence: number;
+  responseSource: MaintenanceCopilotAssistantResponse['source'];
+}): boolean {
+  if (submitSequence !== latestSubmitSequence) {
+    return false;
+  }
+
+  if (responseSource === 'local_preview' && latestRuntimeSuccessSequence >= submitSequence) {
+    return false;
+  }
+
+  return true;
+}
+
+export function extractWorkorderNoFromCopilotPrompt(prompt: string): string | undefined {
+  return prompt.match(copilotWorkorderNumberPattern)?.[0]?.toUpperCase();
+}
+
+export function shouldRouteCopilotPromptToRuntime({
+  prompt,
+  workspaceState,
+  selectedWorkorder,
+}: Pick<MaintenanceCopilotRuntimeRoutingContext, 'prompt' | 'workspaceState' | 'selectedWorkorder'>): boolean {
+  return Boolean(
+    extractWorkorderNoFromCopilotPrompt(prompt)
+    || workspaceState.selectedWorkorderId
+    || selectedWorkorder?.workorder_no,
+  );
+}
+
+export function buildMaintenanceCopilotRuntimeRequest({
+  prompt,
+  filters,
+  workspaceState,
+  selectedWorkorder,
+}: MaintenanceCopilotRuntimeRoutingContext): WorkorderAgentRuntimeRequest {
+  const detectedWorkorderNo = extractWorkorderNoFromCopilotPrompt(prompt);
+  const selectedWorkorderId = detectedWorkorderNo ?? workspaceState.selectedWorkorderId ?? selectedWorkorder?.workorder_no;
+  const selectedMachineId = workspaceState.selectedMachineId ?? selectedWorkorder?.equipment_no;
+
+  return {
+    query: prompt,
+    workorder_no: selectedWorkorderId,
+    surface_id: maintenanceWorkordersSurfaceId,
+    request_source: 'hoya_ui.copilot_submit',
+    context: {
+      include_narrative: true,
+      include_cost_estimate: true,
+      demo_mode: 'cost_intelligence',
+      workorder_no: detectedWorkorderNo ?? selectedWorkorder?.workorder_no,
+      filters,
+      workspace_state: {
+        selected_workorder_id: workspaceState.selectedWorkorderId,
+        selected_machine_id: workspaceState.selectedMachineId,
+        selected_insight_id: workspaceState.selectedInsightId,
+        focused_chart_id: workspaceState.focusedChartId,
+        time_range: workspaceState.synchronizedTimeRange?.value ?? workspaceState.timeRange,
+      },
+    },
+  };
+}
+
+export async function requestMaintenanceCopilotAssistantResponse({
+  prompt,
+  filters,
+  workspaceState,
+  selectedWorkorder,
+  previewRequest,
+  runtimeRequest,
+}: MaintenanceCopilotAssistantResponseInput): Promise<MaintenanceCopilotAssistantResponse> {
+  const runtimeRequestPayload = shouldRouteCopilotPromptToRuntime({ prompt, workspaceState, selectedWorkorder })
+    ? buildMaintenanceCopilotRuntimeRequest({ prompt, filters, workspaceState, selectedWorkorder })
+    : null;
+
+  if (runtimeRequestPayload) {
+    let fallbackReason = 'Runtime unavailable.';
+    let runtimeResult: WorkorderAgentRuntimeResult | undefined;
+
+    try {
+      runtimeResult = await runtimeRequest(runtimeRequestPayload);
+      if (runtimeResult.status === 'success' && isWorkorderAgentPayloadLike(runtimeResult.payload)) {
+        return {
+          source: 'runtime',
+          runtimeRequest: runtimeRequestPayload,
+          runtimeResult,
+        };
+      }
+
+      fallbackReason = runtimeResult.status === 'success'
+        ? 'Runtime response could not be rendered for the workorder conversation.'
+        : runtimeResult.diagnostics.error_code === 'runtime_request_rejected'
+          ? runtimeResult.errorReason
+          : `Runtime unavailable: ${runtimeResult.errorReason}`;
+    } catch (error) {
+      fallbackReason = `Runtime request failed: ${error instanceof Error ? error.message : 'unknown error'}`;
+    }
+
+    const preview = await previewRequest({ message: prompt, filters, limit: 5 });
+    return {
+      source: 'local_preview',
+      preview,
+      fallbackReason,
+      runtimeRequest: runtimeRequestPayload,
+      runtimeResult,
+    };
+  }
+
+  const preview = await previewRequest({ message: prompt, filters, limit: 5 });
+  return {
+    source: 'local_preview',
+    preview,
+    fallbackReason: 'No workorder context was selected or detected in the prompt.',
+  };
+}
+
+export function extractRuntimeWorkspacePayload(payload: unknown): WorkspacePayload | undefined {
+  const record = getRecord(payload);
+  const workspacePayload = getRecord(record?.workspace_payload);
+  return workspacePayload ? workspacePayload as unknown as WorkspacePayload : undefined;
+}
+
+export function extractRuntimeNarrative(payload: unknown): unknown {
+  const record = getRecord(payload);
+  const workspacePayload = getRecord(record?.workspace_payload);
+  return record?.narrative ?? workspacePayload?.narrative;
+}
+
+export function extractRuntimeAssistantText(payload: unknown): string {
+  const record = getRecord(payload);
+  const workspacePayload = getRecord(record?.workspace_payload);
+  const candidate = workspacePayload ?? record;
+  const summary = getRecord(candidate?.summary);
+  const narrative = getRecord(candidate?.narrative);
+  const traceMetadata = getRecord(record?.trace_metadata) ?? getRecord(candidate?.trace_metadata);
+  const headline = getText(summary?.headline);
+  const executiveSummary = getText(narrative?.executive_summary ?? narrative?.executiveSummary);
+  const title = getText(summary?.title);
+  const traceId = getText(traceMetadata?.trace_id);
+  const lines = [
+    headline ?? executiveSummary ?? title ?? 'Runtime workorder analysis is ready.',
+    traceId ? `Runtime trace: ${traceId}` : undefined,
+  ].filter(Boolean);
+
+  return lines.join('\n\n');
 }
 
 const mainRuntimeRegionOrder = [
@@ -2080,11 +2370,14 @@ export function MaintenanceAssistantPanel({
   runtimeFetchDiagnostics?: RuntimeFetchDiagnosticsState;
   onRuntimeFetch?: () => Promise<void>;
 }) {
-  const showRuntimeDiagnostics = WORKORDER_AGENT_RUNTIME_PREVIEW_ENABLED && WORKORDER_WIDGET_DEV_PREVIEW_ENABLED;
+  const showRuntimeDiagnostics = (
+    WORKORDER_AGENT_RUNTIME_PREVIEW_ENABLED
+    && WORKORDER_WIDGET_DEV_PREVIEW_ENABLED
+  ) || Boolean(runtimeFetchDiagnostics && runtimeFetchDiagnostics.status !== 'idle');
 
   return (
     <div
-      className={`absolute inset-y-0 right-0 z-20 w-96 max-w-[calc(100vw-2rem)] border-l border-white/10 bg-[#0f1623] flex flex-col shadow-2xl shadow-black/40 transition-transform duration-300 ease-out ${
+      className={`absolute inset-y-0 right-0 z-20 w-[30rem] max-w-[calc(100vw-1rem)] sm:max-w-[calc(100vw-2rem)] border-l border-white/10 bg-[#0f1623] flex flex-col shadow-2xl shadow-black/40 transition-transform duration-300 ease-out ${
         isOpen ? 'translate-x-0' : 'translate-x-full pointer-events-none'
       }`}
       aria-hidden={!isOpen}
@@ -2105,20 +2398,34 @@ export function MaintenanceAssistantPanel({
           </Button>
         </div>
 
-        <div className="p-3 bg-[#141b2e] border border-white/10 rounded-lg">
-          <p className="text-xs font-medium text-slate-400 mb-2">Existing operational signal snapshot:</p>
-          <div className="space-y-2">
-            <div className="flex items-start gap-2 text-xs">
-              <AlertTriangle className="w-3 h-3 text-red-400 flex-shrink-0 mt-0.5" />
-              <span className="text-slate-300">{summary.overdue_workorder_count} overdue maintenance jobs require review</span>
+        <div className="rounded-lg border border-white/10 bg-[#141b2e] p-2.5">
+          <p className="sr-only">Existing operational signal snapshot:</p>
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            <div className="min-w-0 rounded border border-white/10 bg-[#0f1623] px-2 py-1.5">
+              <div className="flex items-center gap-1.5 text-slate-400">
+                <AlertTriangle className="h-3 w-3 flex-shrink-0 text-red-400" />
+                <span className="truncate">Overdue</span>
+              </div>
+              <p className="mt-1 text-sm font-semibold text-white">{summary.overdue_workorder_count}</p>
             </div>
-            <div className="flex items-start gap-2 text-xs">
-              <Package className="w-3 h-3 text-orange-400 flex-shrink-0 mt-0.5" />
-              <span className="text-slate-300">{summary.stock_risk_item_count} spare part risk items may block workorders</span>
+            <div className="min-w-0 rounded border border-white/10 bg-[#0f1623] px-2 py-1.5">
+              <div className="flex items-center gap-1.5 text-slate-400">
+                <Package className="h-3 w-3 flex-shrink-0 text-orange-400" />
+                <span className="truncate">Parts risk</span>
+              </div>
+              <p className="mt-1 text-sm font-semibold text-white">{summary.stock_risk_item_count}</p>
             </div>
-            <div className="flex items-start gap-2 text-xs">
-              <Activity className="w-3 h-3 text-blue-400 flex-shrink-0 mt-0.5" />
-              <span className="text-slate-300">{selectedWorkorder ? `${selectedWorkorder.workorder_no} selected for context` : `${summary.repeat_failure_candidate_count} repeat failure candidates detected`}</span>
+            <div className="min-w-0 rounded border border-white/10 bg-[#0f1623] px-2 py-1.5">
+              <div className="flex items-center gap-1.5 text-slate-400">
+                <Activity className="h-3 w-3 flex-shrink-0 text-blue-400" />
+                <span className="truncate">{selectedWorkorder ? 'Context' : 'Repeats'}</span>
+              </div>
+              <p className="mt-1 truncate text-sm font-semibold text-white">
+                {selectedWorkorder?.workorder_no ?? summary.repeat_failure_candidate_count}
+                <span className="sr-only">
+                  {selectedWorkorder ? `${selectedWorkorder.workorder_no} selected for context` : `${summary.repeat_failure_candidate_count} repeat failure candidates detected`}
+                </span>
+              </p>
             </div>
           </div>
         </div>
@@ -2128,34 +2435,73 @@ export function MaintenanceAssistantPanel({
         <div className="space-y-4">
           {messages.length === 0 && (
             <div className="rounded-lg border border-white/10 bg-[#141b2e] p-3 text-xs leading-relaxed text-slate-300" data-testid="maintenance-copilot-empty-state">
-              Ask for maintenance blockers, repeat failures, parts risk, or actions for the selected workorder.
+              <p>Ask for maintenance blockers, repeat failures, parts risk, or actions for the selected workorder.</p>
+              <div className="mt-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2" data-testid="maintenance-copilot-prompt-examples">
+                {[
+                  'Analyze selected workorder',
+                  'Explain repeat failure risk',
+                  'Assess business impact',
+                  'Recommend next maintenance actions',
+                ].map((example) => (
+                  <div key={example} className="rounded border border-white/10 bg-[#0f1623] px-2 py-1 text-[11px] text-slate-400">
+                    {example}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
-          {messages.map((message) => (
-            <div key={message.id} className="flex gap-2">
-              <div className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center ${message.role === 'user' ? 'bg-slate-700' : 'bg-cyan-500/20'}`}>
-                {message.role === 'user' ? <User className="w-3 h-3 text-slate-300" /> : <Bot className="w-3 h-3 text-cyan-400" />}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-xs font-medium text-white">{message.role === 'user' ? 'You' : 'Copilot'}</span>
-                  <span className="text-xs text-slate-500">{message.timestamp}</span>
+          {messages.map((message) => {
+            const assessmentWidget = message.role === 'assistant' ? buildAssistantAssessmentWidget(message) : null;
+            const suppressRawAssistantText = Boolean(assessmentWidget);
+
+            return (
+              <div key={message.id} className="flex gap-2">
+                <div className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center ${message.role === 'user' ? 'bg-slate-700' : 'bg-cyan-500/20'}`}>
+                  {message.role === 'user' ? <User className="w-3 h-3 text-slate-300" /> : <Bot className="w-3 h-3 text-cyan-400" />}
                 </div>
-                <div className={`text-xs text-slate-300 p-3 rounded-lg whitespace-pre-line leading-relaxed ${message.role === 'user' ? 'bg-[#1e293b]' : 'bg-[#141b2e] border border-white/10'}`}>
-                  {message.content}
-                  {message.role === 'assistant' && (
-                    <AssistantStructuredBlocks
-                      message={message}
-                      activeInsightIds={workspaceState?.activeInsightIds ?? []}
-                      onInsightSelected={onInsightSelected}
-                      runtimeFetchDiagnostics={runtimeFetchDiagnostics}
-                      onRuntimeFetch={onRuntimeFetch}
-                    />
-                  )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs font-medium text-white">{message.role === 'user' ? 'You' : 'Copilot'}</span>
+                    <span className="text-xs text-slate-500">{message.timestamp}</span>
+                    {message.role === 'assistant' && message.responseSource === 'local_preview' ? (
+                      <Badge className="border-amber-400/30 bg-amber-500/10 text-[10px] text-amber-100" data-testid="maintenance-copilot-local-preview-badge">
+                        Local preview response
+                      </Badge>
+                    ) : null}
+                    {message.role === 'assistant' && message.responseSource === 'runtime' ? (
+                      <Badge className="border-cyan-400/30 bg-cyan-500/10 text-[10px] text-cyan-100" data-testid="maintenance-copilot-runtime-badge">
+                        Runtime response
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <div className={`rounded-lg p-3 ${message.role === 'user' ? 'whitespace-pre-wrap bg-[#1e293b] text-xs leading-relaxed text-slate-300' : 'bg-[#141b2e] border border-white/10'}`}>
+                    {message.role === 'assistant' && message.responseSource === 'local_preview' ? (
+                      <p className="mb-2 rounded border border-amber-400/20 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-100" data-testid="maintenance-copilot-local-preview-note">
+                        Local preview response{message.fallbackReason ? ` - ${message.fallbackReason}` : ''}
+                      </p>
+                    ) : null}
+                    {!suppressRawAssistantText && (
+                      message.role === 'assistant' ? (
+                        <CopilotMarkdown content={message.content} />
+                      ) : (
+                        message.content
+                      )
+                    )}
+                    {message.role === 'assistant' && (
+                      <AssistantStructuredBlocks
+                        message={message}
+                        assessmentWidget={assessmentWidget}
+                        activeInsightIds={workspaceState?.activeInsightIds ?? []}
+                        onInsightSelected={onInsightSelected}
+                        runtimeFetchDiagnostics={runtimeFetchDiagnostics}
+                        onRuntimeFetch={onRuntimeFetch}
+                      />
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
           {isSending && (
             <div className="text-xs text-slate-400 bg-[#141b2e] border border-white/10 rounded-lg p-3">
               Requesting Agentic Core preview...
@@ -2170,38 +2516,42 @@ export function MaintenanceAssistantPanel({
             {copilotError}
           </div>
         )}
-        {workspaceState && (
-          <div className="mb-3 rounded border border-white/10 bg-[#141b2e] p-2 text-xs text-slate-400" data-testid="workspace-synchronization-diagnostics">
-            <details>
-              <summary className="cursor-pointer text-slate-300">Workspace synchronization</summary>
-              <div className="mt-2 space-y-1">
-                <div>{workspaceState.synchronizedTimeRange ? `Time range ${workspaceState.synchronizedTimeRange.value}` : 'Current API snapshot'}</div>
-                <div>Selected {workspaceState.selectedWorkorderId ?? workspaceState.selectedMachineId ?? 'none'}</div>
-                <div>Focused chart {workspaceState.focusedChartId ? formatWorkspaceLabel(workspaceState.focusedChartId) : 'none'}</div>
-                <div>Active insights {workspaceState.activeInsightIds.length}</div>
-                <div>Highlighted {countHighlightedEntities(workspaceState.highlightedEntities)}</div>
-              </div>
-            </details>
-          </div>
-        )}
-        {showRuntimeDiagnostics && (
-          <StandaloneRuntimeFetchDiagnostics
-            runtimeFetchDiagnostics={runtimeFetchDiagnostics}
-            onRuntimeFetch={onRuntimeFetch}
-          />
+        {(workspaceState || showRuntimeDiagnostics) && (
+          <details className="mb-3 rounded border border-white/10 bg-[#141b2e] p-2 text-xs text-slate-400" data-testid="maintenance-copilot-diagnostics">
+            <summary className="cursor-pointer text-slate-300">Diagnostics / Developer details</summary>
+            <div className="mt-2 space-y-2">
+              {workspaceState && (
+                <div className="rounded border border-white/10 bg-[#101827] p-2" data-testid="workspace-synchronization-diagnostics">
+                  <p className="text-slate-300">Workspace synchronization</p>
+                  <div className="mt-1 space-y-1">
+                    <div>{workspaceState.synchronizedTimeRange ? `Time range ${workspaceState.synchronizedTimeRange.value}` : 'Current API snapshot'}</div>
+                    <div>Selected {workspaceState.selectedWorkorderId ?? workspaceState.selectedMachineId ?? 'none'}</div>
+                    <div>Focused chart {workspaceState.focusedChartId ? formatWorkspaceLabel(workspaceState.focusedChartId) : 'none'}</div>
+                    <div>Active insights {workspaceState.activeInsightIds.length}</div>
+                    <div>Highlighted {countHighlightedEntities(workspaceState.highlightedEntities)}</div>
+                  </div>
+                </div>
+              )}
+              {showRuntimeDiagnostics && (
+                <StandaloneRuntimeFetchDiagnostics
+                  runtimeFetchDiagnostics={runtimeFetchDiagnostics}
+                  onRuntimeFetch={onRuntimeFetch}
+                />
+              )}
+            </div>
+          </details>
         )}
         <div className="mb-3">
-          <p className="text-xs text-slate-400 mb-2">Ask the Copilot:</p>
-          <div className="space-y-1">
-            <Button size="sm" variant="outline" className="w-full justify-start border-white/20 text-slate-300 hover:bg-[#1e293b] hover:text-white text-xs h-7" onClick={() => setInputMessage('Summarize current maintenance blockers')}>
+          <div className="flex flex-wrap gap-2">
+            <Button data-testid="maintenance-copilot-quick-current-blockers" size="sm" variant="outline" className="h-7 flex-1 basis-32 justify-start border-white/20 px-2 text-xs text-slate-300 hover:bg-[#1e293b] hover:text-white" onClick={() => setInputMessage('Summarize current maintenance blockers')}>
               <AlertTriangle className="w-3 h-3 mr-1" />
               Current blockers
             </Button>
-            <Button size="sm" variant="outline" className="w-full justify-start border-white/20 text-slate-300 hover:bg-[#1e293b] hover:text-white text-xs h-7" onClick={() => setInputMessage('Which machines have repeat failures?')}>
+            <Button data-testid="maintenance-copilot-quick-repeat-failures" size="sm" variant="outline" className="h-7 flex-1 basis-32 justify-start border-white/20 px-2 text-xs text-slate-300 hover:bg-[#1e293b] hover:text-white" onClick={() => setInputMessage('Which machines have repeat failures?')}>
               <Activity className="w-3 h-3 mr-1" />
               Repeat failures
             </Button>
-            <Button size="sm" variant="outline" className="w-full justify-start border-white/20 text-slate-300 hover:bg-[#1e293b] hover:text-white text-xs h-7" onClick={() => setInputMessage('What parts risks should maintenance watch?')}>
+            <Button data-testid="maintenance-copilot-quick-parts-risk" size="sm" variant="outline" className="h-7 flex-1 basis-32 justify-start border-white/20 px-2 text-xs text-slate-300 hover:bg-[#1e293b] hover:text-white" onClick={() => setInputMessage('What parts risks should maintenance watch?')}>
               <Package className="w-3 h-3 mr-1" />
               Parts risk
             </Button>
@@ -2209,22 +2559,26 @@ export function MaintenanceAssistantPanel({
         </div>
 
         <div className="flex items-end gap-2">
-          <Input
+          <Textarea
+            data-testid="maintenance-copilot-input"
             value={inputMessage}
             onChange={(event) => setInputMessage(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
+              if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
                 event.preventDefault();
                 onSendMessage();
               }
             }}
             placeholder="Ask about maintenance issues..."
-            className="bg-[#1e293b] border-white/10 text-white placeholder:text-slate-500 text-xs h-9"
+            rows={3}
+            disabled={isSending}
+            className="max-h-40 min-h-20 bg-[#1e293b] border-white/10 text-xs leading-relaxed text-white placeholder:text-slate-500 overflow-y-auto"
           />
-          <Button onClick={onSendMessage} disabled={!inputMessage.trim() || isSending} className="bg-cyan-500 hover:bg-cyan-600 text-white h-9 px-3" size="sm" aria-label="Send maintenance assistant query">
+          <Button data-testid="maintenance-copilot-send" onClick={onSendMessage} disabled={!inputMessage.trim() || isSending} className="bg-cyan-500 hover:bg-cyan-600 text-white h-9 px-3" size="sm" aria-label="Send maintenance assistant query">
             <Send className="w-3 h-3" />
           </Button>
         </div>
+        <p className="mt-2 text-[11px] text-slate-500">Enter for new line · Ctrl/Cmd+Enter to send</p>
         <p className="text-xs text-slate-500 mt-2">Agentic Core preview is read-only; UI actions only change local visualization state</p>
       </div>
     </div>
@@ -2233,28 +2587,45 @@ export function MaintenanceAssistantPanel({
 
 function AssistantStructuredBlocks({
   message,
+  assessmentWidget,
   activeInsightIds = [],
   onInsightSelected = () => {},
   runtimeFetchDiagnostics,
   onRuntimeFetch,
 }: {
   message: ChatMessage;
+  assessmentWidget?: Extract<UiWidget, { type: 'narrative_panel' }> | null;
   activeInsightIds?: string[];
   onInsightSelected?: (insight: Insight) => void;
   runtimeFetchDiagnostics?: RuntimeFetchDiagnosticsState;
   onRuntimeFetch?: () => Promise<void>;
 }) {
+  const hasAssessment = Boolean(assessmentWidget);
   const hasInsights = Boolean(message.insights?.length);
   const hasActions = Boolean(message.uiActions?.length);
   const hasWorkspacePayload = Boolean(message.workspacePayload);
 
-  if (!hasInsights && !hasActions && !hasWorkspacePayload) {
+  if (!hasAssessment && !hasInsights && !hasActions && !hasWorkspacePayload) {
     return null;
   }
 
   return (
     <div className="mt-3 space-y-3 border-t border-white/10 pt-3">
-      {message.workspacePayload && <WorkspacePayloadInsight payload={message.workspacePayload} />}
+      {assessmentWidget && (
+        <div className="rounded border border-cyan-400/20 bg-[#0f1623] p-2" data-testid="assistant-narrative-assessment">
+          {renderUiWidget(assessmentWidget, {
+            surface: maintenanceWorkordersSurface,
+            fallbackMode: 'compact',
+          })}
+        </div>
+      )}
+      {assessmentWidget && message.content.trim() && (
+        <details className="rounded border border-white/10 bg-[#0f1623] p-2 text-xs text-slate-400" data-testid="assistant-raw-response">
+          <summary className="cursor-pointer select-none text-slate-300">Raw Response - View raw response</summary>
+          <p className="mt-2 whitespace-pre-line leading-relaxed">{message.content}</p>
+        </details>
+      )}
+      {message.workspacePayload && <WorkspacePayloadInsight payload={message.workspacePayload} suppressNarrative={hasAssessment} />}
       {WORKORDER_WIDGET_SHADOW_MODE_ENABLED && WORKORDER_WIDGET_DEV_PREVIEW_ENABLED && message.workspacePayload && (
         <DeveloperWidgetRegistryPreview
           payload={runtimeFetchDiagnostics?.payload ?? message.workspacePayload}
@@ -2313,7 +2684,7 @@ function StandaloneRuntimeFetchDiagnostics({
   onRuntimeFetch?: () => Promise<void>;
 }) {
   return (
-    <div className="mb-3 rounded border border-cyan-400/20 bg-[#141b2e] p-2" data-testid="runtime-preview-diagnostics">
+    <div className="rounded border border-cyan-400/20 bg-[#141b2e] p-2" data-testid="runtime-preview-diagnostics">
       <RuntimeFetchDiagnosticsPanel
         source={runtimeFetchDiagnostics?.source ?? 'fixture'}
         runtimeStatus={runtimeFetchDiagnostics}
@@ -2321,6 +2692,288 @@ function StandaloneRuntimeFetchDiagnostics({
         onRuntimeFetch={onRuntimeFetch}
       />
     </div>
+  );
+}
+
+function extractPreviewNarrative(preview: OperationsWorkspacePreviewResponse): unknown {
+  return (preview as unknown as { narrative?: unknown }).narrative;
+}
+
+function buildAssistantAssessmentWidget(message: ChatMessage): Extract<UiWidget, { type: 'narrative_panel' }> | null {
+  const directNarrativeWidget = buildNarrativeWidgetFromUnknown(
+    message.narrative,
+    'maintenance.workorders.copilot.response_narrative',
+    'Maintenance Assessment',
+    message.workspacePayload,
+  );
+  if (directNarrativeWidget) {
+    return directNarrativeWidget;
+  }
+
+  if (message.workspacePayload) {
+    const workspaceNarrativeWidget = buildWorkorderWidgetPreviewModel(message.workspacePayload).widgets.find(
+      (widget): widget is Extract<UiWidget, { type: 'narrative_panel' }> => widget.type === 'narrative_panel',
+    );
+    if (workspaceNarrativeWidget) {
+      return workspaceNarrativeWidget;
+    }
+  }
+
+  if (message.runtimePayload) {
+    const runtimeNarrativeWidget = buildWorkorderWidgetPreviewModel(message.runtimePayload).widgets.find(
+      (widget): widget is Extract<UiWidget, { type: 'narrative_panel' }> => widget.type === 'narrative_panel',
+    );
+    if (runtimeNarrativeWidget) {
+      return runtimeNarrativeWidget;
+    }
+  }
+
+  return buildNarrativeWidgetFromMarkdown(message.content);
+}
+
+function buildNarrativeWidgetFromUnknown(
+  value: unknown,
+  id: string,
+  title: string,
+  payload?: WorkspacePayload,
+): Extract<UiWidget, { type: 'narrative_panel' }> | null {
+  const record = getRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  const widget: Extract<UiWidget, { type: 'narrative_panel' }> = {
+    id,
+    type: 'narrative_panel',
+    regionId: 'maintenance.workorders.copilot',
+    title,
+    assessmentHeader: getText(record.assessment_header ?? record.assessmentHeader ?? record.workorder_review ?? record.workorderReview),
+    probableFailure: getText(record.probable_failure ?? record.probableFailure ?? record.probable_failure_mode ?? record.probableFailureMode ?? record.what_failed ?? record.whatFailed),
+    executiveSummary: getText(record.executive_summary ?? record.executiveSummary ?? record.summary),
+    keyFindings: getTextItems(record.key_findings ?? record.keyFindings ?? record.findings),
+    risks: getTextItems(record.risks ?? record.risk),
+    reasoning: getTextItems(record.reasoning ?? record.reasoning_steps ?? record.reasoningSteps),
+    businessImpact: getText(record.business_impact ?? record.businessImpact ?? record.impact),
+    recommendedNextSteps: getTextItems(
+      record.recommended_next_steps
+        ?? record.recommendedNextSteps
+        ?? record.next_steps
+        ?? record.nextSteps
+        ?? record.recommendations,
+    ),
+    evidence: getTextItems(record.supporting_evidence ?? record.supportingEvidence ?? record.evidence ?? record.evidence_refs ?? record.evidenceRefs),
+    limitations: getTextItems(record.limitations ?? record.limits),
+    bottomLine: getText(record.bottom_line ?? record.bottomLine),
+    confidence: getText(record.confidence_level ?? record.confidenceLevel ?? record.confidence) ?? (typeof record.confidence === 'number' ? record.confidence : undefined),
+    riskLevel: getText(record.severity ?? record.risk_level ?? record.riskLevel) ?? payload?.summary.severity,
+    businessImpactStatus: record.business_impact || record.businessImpact || record.impact ? 'assessed' : undefined,
+    validationRequired: Boolean(record.validation_required ?? record.validationRequired ?? payload?.summary.limitations.some((limitation) => /human|review|validat|confirm|required/i.test(limitation))),
+  };
+
+  return hasNarrativeWidgetContent(widget) ? widget : null;
+}
+
+function buildNarrativeWidgetFromMarkdown(content: string): Extract<UiWidget, { type: 'narrative_panel' }> | null {
+  const sections = parseMaintenanceMarkdownSections(content);
+  if (sections.size === 0) {
+    return null;
+  }
+
+  const workorderReview = sections.get('workorder review');
+  const selectedWorkorder = sections.get('selected work order') ?? sections.get('selected workorder');
+  const probableFailure = sections.get('probable failure mode');
+  const whatFailed = sections.get('what failed');
+  const supportingEvidence = sections.get('supporting evidence');
+  const reliabilityRisk = sections.get('reliability risk signals');
+  const recurrence = sections.get('failure recurrence');
+  const sparePartRisk = sections.get('spare part risk');
+  const validationSteps = sections.get('validation steps');
+  const recommendations = sections.get('maintenance recommendations');
+  const limitations = sections.get('limitations');
+  const bottomLine = sections.get('bottom line');
+
+  const widget: Extract<UiWidget, { type: 'narrative_panel' }> = {
+    id: 'maintenance.workorders.copilot.markdown_assessment',
+    type: 'narrative_panel',
+    regionId: 'maintenance.workorders.copilot',
+    title: 'Maintenance Assessment',
+    assessmentHeader: firstNonEmpty(workorderReview, selectedWorkorder),
+    probableFailure: firstNonEmpty(probableFailure, whatFailed),
+    executiveSummary: firstNonEmpty(sections.get('executive summary')),
+    keyFindings: [
+      ...prefixItems('Probable failure mode', probableFailure),
+      ...prefixItems('What failed', whatFailed),
+      ...prefixItems('Reliability risk', reliabilityRisk),
+      ...prefixItems('Failure recurrence', recurrence),
+      ...prefixItems('Spare part risk', sparePartRisk),
+      ...getTextItems(sections.get('key findings')),
+    ],
+    businessImpact: firstNonEmpty(sections.get('business impact'), sections.get('impact')),
+    recommendedNextSteps: [
+      ...getTextItems(validationSteps),
+      ...getTextItems(recommendations),
+      ...getTextItems(sections.get('recommended next steps')),
+      ...getTextItems(sections.get('next steps')),
+    ],
+    risks: [
+      ...getTextItems(sections.get('risks')),
+      ...prefixItems('Reliability risk', reliabilityRisk),
+      ...prefixItems('Spare part risk', sparePartRisk),
+    ],
+    reasoning: getTextItems(sections.get('reasoning')),
+    evidence: [
+      ...getTextItems(supportingEvidence),
+      ...getTextItems(sections.get('evidence')),
+    ],
+    limitations: getTextItems(limitations),
+    bottomLine: firstNonEmpty(bottomLine),
+    confidence: firstNonEmpty(sections.get('confidence level'), sections.get('confidence')),
+    riskLevel: inferMarkdownRiskLevel(content),
+    validationRequired: /validat|confirm|verify|inspection|required/i.test(content),
+  };
+
+  return hasNarrativeWidgetContent(widget) ? widget : null;
+}
+
+function parseMaintenanceMarkdownSections(content: string): Map<string, string> {
+  const wantedHeadings = new Set([
+    'workorder review',
+    'selected work order',
+    'selected workorder',
+    'probable failure mode',
+    'what failed',
+    'supporting evidence',
+    'confidence level',
+    'limitations',
+    'validation steps',
+    'bottom line',
+    'reliability risk signals',
+    'failure recurrence',
+    'spare part risk',
+    'maintenance recommendations',
+    'executive summary',
+    'confidence',
+    'key findings',
+    'business impact',
+    'impact',
+    'recommended next steps',
+    'next steps',
+    'risks',
+    'reasoning',
+    'evidence',
+  ]);
+  const sections = new Map<string, string>();
+  let currentHeading: string | null = null;
+  let currentLines: string[] = [];
+
+  const flush = () => {
+    if (currentHeading && currentLines.some((line) => line.trim())) {
+      sections.set(currentHeading, currentLines.join('\n').trim());
+    }
+  };
+
+  for (const rawLine of content.split(/\r?\n/)) {
+    const heading = normalizeMarkdownHeading(rawLine);
+    if (heading && wantedHeadings.has(heading)) {
+      flush();
+      currentHeading = heading;
+      currentLines = [];
+      continue;
+    }
+
+    if (currentHeading) {
+      currentLines.push(rawLine);
+    }
+  }
+
+  flush();
+  return sections;
+}
+
+function normalizeMarkdownHeading(line: string): string | null {
+  const cleaned = line
+    .trim()
+    .replace(/^#{1,6}\s*/, '')
+    .replace(/^\*\*(.+)\*\*$/, '$1')
+    .replace(/:$/, '')
+    .trim()
+    .toLowerCase();
+
+  return cleaned || null;
+}
+
+function getRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function getText(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  const record = getRecord(value);
+  return record ? getText(record.text ?? record.summary ?? record.description ?? record.title ?? record.label ?? record.reference ?? record.id) : undefined;
+}
+
+function getTextItems(value: unknown): string[] {
+  const text = getText(value);
+  if (text) {
+    return splitNarrativeItems(text);
+  }
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => splitNarrativeItems(getText(item) ?? '')).filter(Boolean);
+}
+
+function splitNarrativeItems(text: string): string[] {
+  return text
+    .split(/\n+/)
+    .map((line) => line.trim().replace(/^[-*]\s*/, '').replace(/^\d+[.)]\s*/, '').trim())
+    .filter(Boolean);
+}
+
+function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
+  return values.find((value) => value && value.trim().length > 0);
+}
+
+function prefixItems(prefix: string, value: string | undefined): string[] {
+  return getTextItems(value).map((item) => `${prefix}: ${item}`);
+}
+
+function inferMarkdownRiskLevel(content: string): string {
+  if (/critical|severe|urgent|blocked|outage/i.test(content)) {
+    return 'critical';
+  }
+  if (/high|elevated|overdue|risk|delay|downtime/i.test(content)) {
+    return 'high';
+  }
+  if (/medium|moderate|watch/i.test(content)) {
+    return 'medium';
+  }
+  if (/low|stable|normal/i.test(content)) {
+    return 'low';
+  }
+  return 'unknown';
+}
+
+function hasNarrativeWidgetContent(widget: Extract<UiWidget, { type: 'narrative_panel' }>): boolean {
+  return Boolean(
+    widget.assessmentHeader
+    || widget.probableFailure
+    || widget.executiveSummary
+    || widget.businessImpact
+    || widget.bottomLine
+    || widget.confidence !== undefined
+    || widget.keyFindings?.length
+    || widget.reasoning?.length
+    || widget.risks?.length
+    || widget.recommendedNextSteps?.length
+    || widget.evidence?.length
+    || widget.limitations?.length,
   );
 }
 
@@ -2456,6 +3109,8 @@ export function RuntimeFetchDiagnosticsPanel({
   isRuntimeLoading: boolean;
   onRuntimeFetch?: () => Promise<void>;
 }) {
+  const showTemporaryRuntimeFailureDiagnostics = Boolean(runtimeStatus && runtimeStatus.status !== 'idle' && runtimeStatus.status !== 'loading' && runtimeStatus.status !== 'success');
+
   return (
     <div className="mt-2 rounded border border-white/10 bg-[#101827] p-2 text-[11px] text-slate-400">
       <div className="flex items-center justify-between gap-2">
@@ -2481,11 +3136,27 @@ export function RuntimeFetchDiagnosticsPanel({
       {runtimeStatus?.endpointUrl ? <p className="mt-1 break-words">endpoint_url {runtimeStatus.endpointUrl}</p> : null}
       {runtimeStatus?.endpointPath ? <p className="mt-1 break-words">endpoint_path {runtimeStatus.endpointPath}</p> : null}
       {typeof runtimeStatus?.timeoutMs === 'number' ? <p className="mt-1 break-words">timeout_ms {runtimeStatus.timeoutMs}</p> : null}
+      {showTemporaryRuntimeFailureDiagnostics ? (
+        <div className="mt-2 rounded border border-amber-400/20 bg-amber-500/10 p-2 text-amber-100" data-testid="hoya-spec023-runtime-request-diagnostics">
+          <p className="font-medium">Temporary demo diagnostics HOYA-SPEC023</p>
+          {runtimeStatus?.requestUrl ? <p className="mt-1 break-words">request_url {runtimeStatus.requestUrl}</p> : null}
+          {runtimeStatus?.requestPayload ? (
+            <div className="mt-1">
+              <p>request_payload JSON</p>
+              <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-black/20 p-2 text-[10px] leading-relaxed">{runtimeStatus.requestPayload}</pre>
+            </div>
+          ) : null}
+          {typeof runtimeStatus?.responseStatus === 'number' ? <p className="mt-1 break-words">response_status {runtimeStatus.responseStatus}</p> : null}
+          {runtimeStatus?.responseBody ? <p className="mt-1 whitespace-pre-wrap break-words">response_body {runtimeStatus.responseBody}</p> : null}
+        </div>
+      ) : null}
       {runtimeStatus?.requestSource ? <p className="mt-1 break-words">request_source {runtimeStatus.requestSource}</p> : null}
       {runtimeStatus?.clientTraceId ? <p className="mt-1 break-words">client_trace_id {runtimeStatus.clientTraceId}</p> : null}
       {runtimeStatus?.runtimeTraceId ? <p className="mt-1 break-words">runtime_trace_id {runtimeStatus.runtimeTraceId}</p> : null}
       {runtimeStatus?.payloadVersion ? <p className="mt-1 break-words">payload_version {runtimeStatus.payloadVersion}</p> : null}
       {runtimeStatus?.errorCode ? <p className="mt-1 break-words text-amber-200">error_code {runtimeStatus.errorCode}</p> : null}
+      {typeof runtimeStatus?.httpStatus === 'number' ? <p className="mt-1 break-words text-amber-200">http_status {runtimeStatus.httpStatus}</p> : null}
+      {runtimeStatus?.responseBody ? <p className="mt-1 whitespace-pre-wrap break-words text-amber-100">response_body {runtimeStatus.responseBody}</p> : null}
       {runtimeStatus?.requestedAt ? <p className="mt-1">requested_at {runtimeStatus.requestedAt}</p> : null}
       {runtimeStatus?.completedAt ? <p>completed_at {runtimeStatus.completedAt}</p> : null}
     </div>
@@ -2516,15 +3187,29 @@ export function handleDeveloperReadonlyAction(event: UiReadonlyActionEvent): Act
   return result;
 }
 
-function WorkspacePayloadInsight({ payload }: { payload: WorkspacePayload }) {
+function WorkspacePayloadInsight({ payload, suppressNarrative = false }: { payload: WorkspacePayload; suppressNarrative?: boolean }) {
   const { summary } = payload;
+  const narrativeWidgets = useMemo(
+    () => buildWorkorderWidgetPreviewModel(payload).widgets.filter((widget): widget is Extract<UiWidget, { type: 'narrative_panel' }> => widget.type === 'narrative_panel'),
+    [payload],
+  );
+  const hasNarrative = !suppressNarrative && narrativeWidgets.length > 0;
 
   return (
     <div className="space-y-3" data-testid="workspace-payload-section">
+      {hasNarrative && (
+        <div className="rounded border border-cyan-400/20 bg-[#0f1623] p-2" data-testid="workspace-narrative-panel">
+          {renderUiWidgetList(narrativeWidgets, {
+            surface: maintenanceWorkordersSurface,
+            fallbackMode: 'compact',
+          })}
+        </div>
+      )}
+
       <div className="rounded border border-cyan-400/20 bg-[#0f1623] p-2">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="text-[11px] uppercase text-cyan-300/80">Workspace Insight</p>
+            <p className="text-[11px] uppercase text-cyan-300/80">{hasNarrative ? 'Assessment Context' : 'Workspace Insight'}</p>
             <h4 className="mt-1 text-xs font-semibold text-white">{summary.title}</h4>
           </div>
           <div className="flex flex-shrink-0 gap-1">
@@ -2577,15 +3262,17 @@ function WorkspacePayloadInsight({ payload }: { payload: WorkspacePayload }) {
       )}
 
       {payload.evidence.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-[11px] uppercase text-slate-500">Evidence</p>
-          {payload.evidence.map((item, index) => (
-            <div key={`${item.source_name}-${index}`} className="rounded border border-white/10 bg-[#0f1623] p-2">
-              <p className="text-xs font-medium text-slate-200">{item.source_name}</p>
-              {item.description && <p className="mt-1 text-xs text-slate-400">{item.description}</p>}
-            </div>
-          ))}
-        </div>
+        <details className="rounded border border-white/10 bg-[#0f1623] p-2 text-xs text-slate-300" data-testid="workspace-evidence-sources">
+          <summary className="cursor-pointer select-none text-slate-200">Evidence Sources ({payload.evidence.length}) <span className="text-cyan-200">View Evidence</span></summary>
+          <div className="mt-2 space-y-2">
+            {payload.evidence.map((item, index) => (
+              <div key={`${item.source_name}-${index}`} className="rounded border border-white/10 bg-[#101827] p-2">
+                <p className="text-xs font-medium text-slate-200">{item.source_name}</p>
+                {item.description && <p className="mt-1 text-xs text-slate-400">{item.description}</p>}
+              </div>
+            ))}
+          </div>
+        </details>
       )}
 
       {summary.limitations.length > 0 && (

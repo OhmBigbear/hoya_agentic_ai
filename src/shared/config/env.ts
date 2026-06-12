@@ -14,7 +14,7 @@ export const WORKORDER_AGENT_RUNTIME_ENDPOINT_URL =
 export const WORKORDER_AGENT_RUNTIME_PATH =
   import.meta.env.VITE_WORKORDER_AGENT_RUNTIME_PATH ||
   processEnv.VITE_WORKORDER_AGENT_RUNTIME_PATH ||
-  '/api/workorder-agent/runtime';
+  '/api/runtime/workorder-agent';
 export const WORKORDER_AGENT_RUNTIME_TIMEOUT_MS = Number(
   import.meta.env.VITE_WORKORDER_AGENT_RUNTIME_TIMEOUT_MS ||
   processEnv.VITE_WORKORDER_AGENT_RUNTIME_TIMEOUT_MS ||

@@ -6,6 +6,7 @@ export interface WorkorderRuntimeRequestInput {
   question?: string;
   surface_id: string;
   request_source: string;
+  workorder_no?: string;
   selected_workorder_id?: string;
   selected_machine_id?: string;
   machine_id?: string;
@@ -24,11 +25,8 @@ export interface WorkorderRuntimeRequestEnvelope {
   query: string;
   surface_id: string;
   request_source: string;
-  selected_workorder_id?: string;
-  selected_machine_id?: string;
+  workorder_no?: string;
   context: WorkorderRuntimeRequestContext;
-  client_trace_id: string;
-  payload_version: string;
 }
 
 export interface WorkorderRuntimeTraceMetadata {
@@ -74,11 +72,16 @@ export interface WorkorderRuntimeContractDiagnostics {
   endpoint_url?: string;
   endpoint_path?: string;
   timeout_ms?: number;
+  request_url?: string;
+  request_payload?: string;
   request_source?: string;
   client_trace_id?: string;
   runtime_trace_id?: string;
   payload_version?: string;
   error_code?: string;
+  response_status?: number;
+  http_status?: number;
+  response_body?: string;
 }
 
 export interface ParsedWorkorderRuntimeResponse {
@@ -92,15 +95,34 @@ export function buildWorkorderRuntimeRequest(
   input: WorkorderRuntimeRequestInput,
   createTraceId: () => string = defaultClientTraceId,
 ): WorkorderRuntimeRequestEnvelope {
-  return {
+  const selectedWorkorderId = optionalText(input.selected_workorder_id);
+  const selectedMachineId = optionalText(input.selected_machine_id ?? input.machine_id);
+  const workorderNo = optionalText(input.workorder_no) ?? selectedWorkorderId;
+  const context = {
+    ...(input.context ?? input.context_metadata ?? {}),
+  };
+  if (selectedWorkorderId || selectedMachineId) {
+    const workspaceState = getRecord(context.workspace_state);
+    context.workspace_state = {
+      ...(workspaceState ?? {}),
+      ...(selectedWorkorderId ? { selected_workorder_id: selectedWorkorderId } : {}),
+      ...(selectedMachineId ? { selected_machine_id: selectedMachineId } : {}),
+    };
+  }
+
+  const request: WorkorderRuntimeRequestEnvelope = {
     query: requiredText(input.query ?? input.question),
     surface_id: requiredText(input.surface_id),
     request_source: requiredText(input.request_source),
-    selected_workorder_id: optionalText(input.selected_workorder_id),
-    selected_machine_id: optionalText(input.selected_machine_id ?? input.machine_id),
-    context: input.context ?? input.context_metadata ?? {},
-    client_trace_id: optionalText(input.client_trace_id) ?? createTraceId(),
-    payload_version: optionalText(input.payload_version) ?? WORKORDER_RUNTIME_REQUEST_PAYLOAD_VERSION,
+    context,
+  };
+  if (workorderNo) {
+    request.workorder_no = workorderNo;
+  }
+
+  void createTraceId;
+  return {
+    ...request,
   };
 }
 

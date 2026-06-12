@@ -17,14 +17,14 @@ Example disabled-by-default configuration:
 ```dotenv
 VITE_WORKORDER_AGENT_RUNTIME_URL=
 VITE_WORKORDER_AGENT_RUNTIME_BASE_URL=
-VITE_WORKORDER_AGENT_RUNTIME_PATH=/api/workorder-agent/runtime
+VITE_WORKORDER_AGENT_RUNTIME_PATH=/api/runtime/workorder-agent
 VITE_WORKORDER_AGENT_RUNTIME_TIMEOUT_MS=10000
 ```
 
 Example full URL mode:
 
 ```dotenv
-VITE_WORKORDER_AGENT_RUNTIME_URL=https://agentic-core.example.com/api/workorder-agent/runtime
+VITE_WORKORDER_AGENT_RUNTIME_URL=https://agentic-core.example.com/api/runtime/workorder-agent
 VITE_WORKORDER_AGENT_RUNTIME_TIMEOUT_MS=10000
 ```
 
@@ -32,7 +32,7 @@ Example base URL + path mode:
 
 ```dotenv
 VITE_WORKORDER_AGENT_RUNTIME_BASE_URL=https://agentic-core.example.com
-VITE_WORKORDER_AGENT_RUNTIME_PATH=/api/workorder-agent/runtime
+VITE_WORKORDER_AGENT_RUNTIME_PATH=/api/runtime/workorder-agent
 VITE_WORKORDER_AGENT_RUNTIME_TIMEOUT_MS=10000
 ```
 
@@ -40,21 +40,25 @@ VITE_WORKORDER_AGENT_RUNTIME_TIMEOUT_MS=10000
 
 ```json
 {
-  "query": "Summarize current maintenance blockers",
+  "query": "Investigate BMM26-02465",
   "surface_id": "maintenance.workorders",
-  "request_source": "hoya_ui.developer_diagnostics",
-  "selected_workorder_id": "WO-100",
-  "selected_machine_id": "MACHINE-7A",
+  "request_source": "hoya_ui.copilot_submit",
+  "workorder_no": "BMM26-02465",
   "context": {
+    "include_narrative": true,
+    "include_cost_estimate": true,
+    "demo_mode": "cost_intelligence",
+    "workorder_no": "BMM26-02465",
     "filters": {},
-    "workspace_state": {}
-  },
-  "client_trace_id": "uuid-or-client-generated-id",
-  "payload_version": "1.0"
+    "workspace_state": {
+      "selected_workorder_id": "BMM26-02465",
+      "selected_machine_id": "BMM-LINE-01"
+    }
+  }
 }
 ```
 
-The helper `buildWorkorderRuntimeRequest()` accepts the B0.8 aliases `question`, `machine_id`, and `context_metadata`, then emits the canonical B0.9 envelope above.
+The helper `buildWorkorderRuntimeRequest()` accepts the older UI aliases `question`, `selected_workorder_id`, `machine_id`, `selected_machine_id`, and `context_metadata`, then emits only backend-supported top-level fields: `query`, `surface_id`, `request_source`, `workorder_no`, and `context`. Selected workorder or machine IDs are nested under `context.workspace_state` when provided.
 
 ## Response Envelope
 
