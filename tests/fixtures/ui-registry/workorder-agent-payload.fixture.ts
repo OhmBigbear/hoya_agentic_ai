@@ -347,6 +347,112 @@ export const unsafeRuntimeWorkorderAgentResponse = {
   ],
 };
 
+export const agenticCoreFastPathCostIntelligenceResponse = {
+  payload_version: 'v1',
+  trace: {
+    trace_id: 'trace-fast-path-cost-intelligence-023',
+    agent_id: 'workorder-agent',
+    run_id: 'run-fast-path-cost-intelligence-023',
+    payload_version: 'v1',
+  },
+  summary: {
+    title: 'Fast path cost intelligence',
+    headline: 'Cost intelligence found elevated spare-part exposure on BMM-LINE-01.',
+    text: '## Cost Intelligence Workorder Investigation\nThe selected workorder BMM26-02465 has a concentrated cost estimate in bearing replacement and labor. Validate the estimate before scheduling.',
+    confidence: 'high',
+    severity: 'warning',
+    limitations: ['Cost estimate includes rows outside the selected context and requires operator review.'],
+  },
+  narrative: {
+    sections: {
+      executive_summary: {
+        title: 'Executive Summary',
+        items: [
+          'Cost intelligence fast path completed for BMM26-02465 with elevated spare-part exposure on BMM-LINE-01.',
+        ],
+      },
+      key_findings: {
+        title: 'Key Findings',
+        items: [
+          'Bearing replacement and technician time drive most of the estimate.',
+          'One cost row belongs to another workorder and machine.',
+        ],
+      },
+      business_impact: {
+        title: 'Business Impact',
+        items: [
+          'Unvalidated cost rows can overstate the selected workorder estimate and shift maintenance priority away from BMM-LINE-01.',
+          'Cost variance risk remains elevated until the mismatched row is removed.',
+        ],
+      },
+      recommended_next_steps: {
+        title: 'Recommended Next Steps',
+        items: [
+          'Validate cost rows against BMM26-02465 before scheduling.',
+          'Review the mismatched workorder row separately.',
+        ],
+      },
+      confidence: {
+        label: 'High confidence',
+        score: 0.91,
+        rationale: 'Fast path evidence matches selected workorder, machine, and cost rows after excluding the mismatch.',
+        limitations: ['Cost estimates remain advisory until finance validates the spare-part price.'],
+      },
+    },
+  },
+  widgets: [
+    {
+      id: 'fast-path-cost-summary',
+      payload_version: '1.0',
+      widget_type: 'workorder_summary',
+      title: 'Cost intelligence summary',
+      summary: 'Estimated maintenance cost is concentrated in bearing replacement and technician time.',
+      payload: {
+        items: [
+          { label: 'Estimated cost', value: 18450 },
+          { label: 'Rows reviewed', value: 2 },
+        ],
+      },
+    },
+    {
+      id: 'fast-path-cost-workorders',
+      payload_version: '1.0',
+      widget_type: 'workorder_table',
+      title: 'Cost estimate workorders',
+      payload: {
+        rows: [
+          { workorder_no: 'BMM26-02465', equipment_no: 'BMM-LINE-01', priority: 'High' },
+          { workorder_no: 'BMM26-09999', equipment_no: 'BMM-LINE-99', priority: 'Medium' },
+        ],
+      },
+    },
+  ],
+  readonly_actions: [
+    { id: 'view_workorder', mode: 'readonly', label: 'View BMM26-02465', target: 'BMM26-02465' },
+    { id: 'view_machine', mode: 'readonly', label: 'View BMM-LINE-01', target: 'BMM-LINE-01' },
+  ],
+  diagnostics: [
+    {
+      code: 'fast_path',
+      severity: 'info',
+      section: 'cost_intelligence',
+      message: 'cost_intelligence fast path response returned from Agentic Core.',
+    },
+  ],
+  cost_estimate_metadata: {
+    rows: [
+      { workorder_no: 'BMM26-02465', machine_id: 'BMM-LINE-01', estimated_cost: 18450 },
+      { workorder_no: 'BMM26-09999', machine_id: 'BMM-LINE-99', estimated_cost: 9200 },
+    ],
+  },
+  request_context: {
+    workspace_state: {
+      selected_workorder_id: 'BMM26-02465',
+      selected_machine_id: 'BMM-LINE-01',
+    },
+  },
+};
+
 export const approvalRuntimeWorkorderAgentResponse = {
   ...runtimeWorkorderAgentResponse,
   approval: {

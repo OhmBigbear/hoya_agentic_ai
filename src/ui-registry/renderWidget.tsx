@@ -155,33 +155,68 @@ function renderSummaryCard(widget: UiSummaryCardWidget, warnings: UiValidationIs
 }
 
 function renderNarrativePanel(widget: UiNarrativePanelWidget, warnings: UiValidationIssue[]): React.ReactElement {
+  const evidenceSourceCount = countEvidenceSources(widget);
   const secondarySections = [
+    { title: 'Limitations', items: widget.limitations },
     { title: 'Risks', items: widget.risks },
-    { title: 'Evidence', items: widget.evidence },
     { title: 'Reasoning', items: widget.reasoning },
   ];
 
   return (
-    <section aria-label={widget.title ?? 'Narrative'} data-widget-id={widget.id}>
-      <h3>{widget.title ?? 'Narrative'}</h3>
+    <section
+      aria-label="Maintenance Assessment"
+      className="space-y-3 rounded-lg border border-cyan-400/20 bg-[#101827] p-3 text-slate-200"
+      data-testid="maintenance-assessment"
+      data-widget-id={widget.id}
+    >
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-[11px] font-medium uppercase tracking-normal text-cyan-300/80">Maintenance Assessment</p>
+          <h3 className="mt-1 text-sm font-semibold text-white">{widget.title ?? 'Maintenance Assessment'}</h3>
+        </div>
+        <div className="flex flex-wrap gap-1.5 text-[11px]" aria-label="Assessment status">
+          <span className={getAssessmentBadgeClass('risk', widget.riskLevel)}>Risk Level {formatValue(widget.riskLevel ?? inferRiskLevel(widget))}</span>
+          {widget.confidence !== undefined ? <span className={getAssessmentBadgeClass('confidence', widget.confidence)}>Confidence {formatValue(widget.confidence)}</span> : null}
+          <span className={getAssessmentBadgeClass('impact', widget.businessImpactStatus)}>Business Impact {formatValue(widget.businessImpactStatus ?? (widget.businessImpact ? 'assessed' : 'pending'))}</span>
+          {widget.validationRequired ? <span className={getAssessmentBadgeClass('validation', 'required')}>Validation Required</span> : null}
+        </div>
+      </div>
       {widget.description ? <p>{widget.description}</p> : null}
+      {widget.assessmentHeader ? (
+        <section aria-label="Assessment Header" className="rounded-lg border border-white/10 bg-[#0f1623] p-3" data-testid="maintenance-assessment-header">
+          <h4 className="text-xs font-semibold uppercase tracking-normal text-slate-300">Assessment Header</h4>
+          <p className="mt-2 text-sm leading-6 text-slate-100">{widget.assessmentHeader}</p>
+        </section>
+      ) : null}
+      {widget.probableFailure ? (
+        <section aria-label="Probable Failure / What Failed" className="rounded-lg border border-red-400/20 bg-red-500/10 p-3" data-testid="maintenance-assessment-probable-failure">
+          <h4 className="text-xs font-semibold uppercase tracking-normal text-red-100">Probable Failure / What Failed</h4>
+          <p className="mt-2 text-sm leading-6 text-red-50">{widget.probableFailure}</p>
+        </section>
+      ) : null}
       {widget.executiveSummary ? (
-        <section aria-label="Executive Summary">
-          <h4>Executive Summary</h4>
-          <p>{widget.executiveSummary}</p>
+        <section aria-label="Executive Summary" className="rounded-lg border border-cyan-300/20 bg-cyan-500/10 p-3" data-testid="maintenance-assessment-executive-summary">
+          <h4 className="text-xs font-semibold uppercase tracking-normal text-cyan-100">Executive Summary</h4>
+          <p className="mt-2 text-sm leading-6 text-white">{widget.executiveSummary}</p>
         </section>
       ) : null}
-      {renderNarrativeListSection('Key Findings', widget.keyFindings)}
+      {renderKeyFindingsSection(widget.keyFindings)}
       {widget.businessImpact ? (
-        <section aria-label="Business Impact">
-          <h4>Business Impact</h4>
-          <p>{widget.businessImpact}</p>
+        <section aria-label="Business Impact" className="rounded-lg border border-amber-400/20 bg-amber-500/10 p-3" data-testid="maintenance-assessment-business-impact">
+          <h4 className="text-xs font-semibold uppercase tracking-normal text-amber-100">Business Impact</h4>
+          <p className="mt-2 text-sm leading-6 text-amber-50">{widget.businessImpact}</p>
         </section>
       ) : null}
-      {renderNarrativeListSection('Recommended Next Steps', widget.recommendedNextSteps)}
+      {renderNextStepsSection(widget.recommendedNextSteps)}
+      {widget.bottomLine ? (
+        <section aria-label="Bottom Line" className="rounded-lg border border-emerald-400/20 bg-emerald-500/10 p-3" data-testid="maintenance-assessment-bottom-line">
+          <h4 className="text-xs font-semibold uppercase tracking-normal text-emerald-100">Bottom Line</h4>
+          <p className="mt-2 text-sm leading-6 text-emerald-50">{widget.bottomLine}</p>
+        </section>
+      ) : null}
       {secondarySections.some((section) => section.items?.length) ? (
-        <details>
-          <summary>Additional narrative detail</summary>
+        <details className="rounded border border-white/10 bg-[#0f1623] p-2 text-xs text-slate-300" data-testid="maintenance-assessment-secondary-detail">
+          <summary className="cursor-pointer select-none text-slate-200">Limitations and Additional narrative detail</summary>
           {secondarySections.map((section) => (
             <React.Fragment key={section.title}>
               {renderNarrativeListSection(section.title, section.items)}
@@ -189,10 +224,19 @@ function renderNarrativePanel(widget: UiNarrativePanelWidget, warnings: UiValida
           ))}
         </details>
       ) : null}
-      {widget.confidence !== undefined ? (
-        <p>
-          <strong>Confidence</strong>: {formatValue(widget.confidence)}
-        </p>
+      {evidenceSourceCount > 0 ? (
+        <details className="rounded border border-white/10 bg-[#0f1623] p-2 text-xs text-slate-300" data-testid="maintenance-assessment-evidence">
+          <summary className="cursor-pointer select-none text-slate-200">Full Evidence / Evidence Sources ({evidenceSourceCount}) <span className="text-cyan-200">View Evidence</span></summary>
+          {renderNarrativeListSection('Raw Evidence References', widget.evidence)}
+          {renderEvidenceRefs(widget.evidenceRefs)}
+        </details>
+      ) : null}
+      {widget.traceRefs?.length || widget.metadata ? (
+        <details className="rounded border border-white/10 bg-[#0f1623] p-2 text-xs text-slate-400" data-testid="maintenance-assessment-tool-source-details">
+          <summary className="cursor-pointer select-none text-slate-300">Tool Source Details</summary>
+          {renderTraceRefs(widget.traceRefs)}
+          {renderMetadataSummary(widget.metadata)}
+        </details>
       ) : null}
       <WidgetValidationMessages messages={warnings} />
     </section>
@@ -206,12 +250,99 @@ function renderNarrativeListSection(title: string, items?: string[]): React.Reac
 
   return (
     <section aria-label={title}>
-      <h4>{title}</h4>
+      <h4 className="mt-3 text-xs font-semibold uppercase tracking-normal text-slate-300">{title}</h4>
       <ul>
         {items.map((item, index) => <li key={`${title}-${index}`}>{item}</li>)}
       </ul>
     </section>
   );
+}
+
+function renderKeyFindingsSection(items?: string[]): React.ReactElement | null {
+  if (!items?.length) {
+    return null;
+  }
+
+  return (
+    <section aria-label="Key Findings" className="space-y-2" data-testid="maintenance-assessment-key-findings">
+      <h4 className="text-xs font-semibold uppercase tracking-normal text-slate-300">Key Findings</h4>
+      <div className="grid gap-2">
+        {items.map((item, index) => (
+          <div key={`Key Findings-${index}`} className="rounded border border-white/10 bg-[#0f1623] p-2 text-xs leading-5 text-slate-200">
+            {item}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function renderNextStepsSection(items?: string[]): React.ReactElement | null {
+  if (!items?.length) {
+    return null;
+  }
+
+  return (
+    <section aria-label="Recommended Next Steps" className="space-y-2" data-testid="maintenance-assessment-next-steps">
+      <h4 className="text-xs font-semibold uppercase tracking-normal text-slate-300">Recommended Next Steps</h4>
+      <ol className="space-y-2">
+        {items.map((item, index) => (
+          <li key={`Recommended Next Steps-${index}`} className="flex gap-2 rounded border border-emerald-400/20 bg-emerald-500/10 p-2 text-xs leading-5 text-emerald-50">
+            <span aria-hidden="true" className="mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border border-emerald-300/40 text-[10px] text-emerald-100">OK</span>
+            <span>{item}</span>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function countEvidenceSources(widget: UiNarrativePanelWidget): number {
+  const narrativeEvidenceCount = widget.evidence?.length ?? 0;
+  const evidenceRefCount = widget.evidenceRefs?.length ?? 0;
+  return Math.max(narrativeEvidenceCount, evidenceRefCount);
+}
+
+function inferRiskLevel(widget: UiNarrativePanelWidget): string {
+  const text = [
+    widget.executiveSummary,
+    widget.businessImpact,
+    ...(widget.keyFindings ?? []),
+    ...(widget.risks ?? []),
+  ].join(' ').toLowerCase();
+
+  if (/critical|severe|urgent|blocked|outage/.test(text)) {
+    return 'critical';
+  }
+  if (/high|elevated|overdue|risk|delay|downtime/.test(text)) {
+    return 'high';
+  }
+  if (/medium|moderate|watch/.test(text)) {
+    return 'medium';
+  }
+  if (/low|stable|normal/.test(text)) {
+    return 'low';
+  }
+  return 'unknown';
+}
+
+function getAssessmentBadgeClass(type: 'risk' | 'confidence' | 'impact' | 'validation', value: unknown): string {
+  const normalized = String(value ?? '').toLowerCase();
+  const base = 'rounded border px-2 py-1 font-medium';
+
+  if (type === 'validation') {
+    return `${base} border-amber-400/30 bg-amber-500/15 text-amber-100`;
+  }
+  if (type === 'confidence' && normalized.includes('high')) {
+    return `${base} border-emerald-400/30 bg-emerald-500/15 text-emerald-100`;
+  }
+  if (normalized.includes('critical') || normalized.includes('high') || normalized.includes('warning') || normalized.includes('elevated')) {
+    return `${base} border-amber-400/30 bg-amber-500/15 text-amber-100`;
+  }
+  if (normalized.includes('low') || normalized.includes('normal') || normalized.includes('stable') || normalized.includes('assessed')) {
+    return `${base} border-emerald-400/30 bg-emerald-500/15 text-emerald-100`;
+  }
+  return `${base} border-slate-500/30 bg-slate-700/50 text-slate-100`;
 }
 
 function renderDataTable(widget: UiDataTableWidget, warnings: UiValidationIssue[]): React.ReactElement {
@@ -301,10 +432,13 @@ function renderInsightList(widget: UiInsightListWidget, warnings: UiValidationIs
 
 function renderEvidenceList(widget: UiEvidenceListWidget, warnings: UiValidationIssue[]): React.ReactElement {
   return (
-    <section aria-label={widget.title ?? 'Evidence'} data-widget-id={widget.id}>
-      <h3>{widget.title ?? 'Evidence'}</h3>
+    <section aria-label={widget.title ?? 'Evidence'} data-widget-id={widget.id} data-testid="evidence-sources">
+      <h3>{widget.title ?? 'Evidence Sources'} ({widget.evidenceRefs.length})</h3>
       {widget.description ? <p>{widget.description}</p> : null}
-      {renderEvidenceRefs(widget.evidenceRefs)}
+      <details data-testid="evidence-sources-detail">
+        <summary>View Evidence</summary>
+        {renderEvidenceRefs(widget.evidenceRefs)}
+      </details>
       <WidgetValidationMessages messages={warnings} />
     </section>
   );

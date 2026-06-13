@@ -59,6 +59,8 @@ export interface UiSummaryCardWidget extends UiWidgetBase {
 
 export interface UiNarrativePanelWidget extends UiWidgetBase {
   type: 'narrative_panel';
+  assessmentHeader?: string;
+  probableFailure?: string;
   executiveSummary?: string;
   keyFindings?: string[];
   reasoning?: string[];
@@ -66,7 +68,12 @@ export interface UiNarrativePanelWidget extends UiWidgetBase {
   businessImpact?: string;
   recommendedNextSteps?: string[];
   evidence?: string[];
+  limitations?: string[];
+  bottomLine?: string;
   confidence?: string | number | null;
+  riskLevel?: string | number | null;
+  businessImpactStatus?: string | number | null;
+  validationRequired?: boolean;
 }
 
 export interface UiDataTableWidget extends UiWidgetBase {

@@ -110,6 +110,9 @@ describe('operations workspace visualization synchronization', () => {
     );
 
     expect(markup).toContain('Repeat failure on MACHINE-7A');
+    expect(markup).toContain('Diagnostics / Developer details');
+    expect(markup).toContain('data-testid="maintenance-copilot-diagnostics"');
+    expect(markup).not.toMatch(/<details[^>]*data-testid="maintenance-copilot-diagnostics"[^>]*open/);
     expect(markup).toContain('Workspace synchronization');
     expect(markup).toContain('Focused chart Maintenance Frequency Chart');
     expect(markup).toContain('Active insights 1');

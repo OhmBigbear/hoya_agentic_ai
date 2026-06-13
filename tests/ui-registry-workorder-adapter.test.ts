@@ -432,6 +432,8 @@ describe('workorder agent payload adapter', () => {
     const normalized = normalizeWorkorderAgentPayload(payload);
     const widgets = adaptWorkorderAgentPayloadToWidgets(payload);
     const narrativeWidget = widgets.find((widget): widget is Extract<UiWidget, { type: 'narrative_panel' }> => widget.type === 'narrative_panel');
+    const narrativeIndex = widgets.findIndex((widget) => widget.type === 'narrative_panel');
+    const insightIndex = widgets.findIndex((widget) => widget.type === 'insight_list');
 
     expect(normalized.narrative).toMatchObject({
       executiveSummary: 'POLISHING-7A is the current maintenance blocker.',
@@ -449,6 +451,9 @@ describe('workorder agent payload adapter', () => {
       title: 'Agent narrative',
       executiveSummary: 'POLISHING-7A is the current maintenance blocker.',
     });
+    expect(narrativeIndex).toBeGreaterThanOrEqual(0);
+    expect(insightIndex).toBeGreaterThanOrEqual(0);
+    expect(narrativeIndex).toBeLessThan(insightIndex);
     assertAllWidgetsValid(widgets);
   });
 

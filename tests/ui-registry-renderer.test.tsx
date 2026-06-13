@@ -50,7 +50,7 @@ describe('ui registry widget renderer', () => {
     expect(markup).toContain('3');
   });
 
-  it('renders narrative_panel with compact default and expandable detail sections', () => {
+  it('renders narrative_panel as a Maintenance Assessment with expandable detail sections', () => {
     const markup = render(widget({
       id: 'narrative',
       type: 'narrative_panel',
@@ -66,17 +66,26 @@ describe('ui registry widget renderer', () => {
       confidence: 'high',
     }));
 
+    expect(markup).toContain('data-testid="maintenance-assessment"');
+    expect(markup).toContain('Maintenance Assessment');
+    expect(markup).toContain('Risk Level high');
+    expect(markup).toContain('Confidence high');
+    expect(markup).toContain('Business Impact assessed');
     expect(markup).toContain('Agent narrative');
     expect(markup).toContain('Executive Summary');
     expect(markup).toContain('Key Findings');
     expect(markup).toContain('Business Impact');
     expect(markup).toContain('Recommended Next Steps');
-    expect(markup).toContain('<summary>Additional narrative detail</summary>');
+    expect(markup).toContain('data-testid="maintenance-assessment-executive-summary"');
+    expect(markup).toContain('data-testid="maintenance-assessment-key-findings"');
+    expect(markup).toContain('data-testid="maintenance-assessment-next-steps"');
+    expect(markup).toContain('data-testid="maintenance-assessment-secondary-detail"');
+    expect(markup).not.toMatch(/data-testid="maintenance-assessment-secondary-detail"[^>]*open/);
     expect(markup).toContain('Risks');
-    expect(markup).toContain('Evidence');
     expect(markup).toContain('Reasoning');
-    expect(markup).toContain('Confidence');
-    expect(markup).toContain('high');
+    expect(markup).toContain('Evidence Sources (1)');
+    expect(markup).toContain('View Evidence');
+    expect(markup).not.toMatch(/data-testid="maintenance-assessment-evidence"[^>]*open/);
   });
 
   it('renders narrative_panel when optional sections are missing', () => {
@@ -161,7 +170,7 @@ describe('ui registry widget renderer', () => {
     expect(markup).not.toContain('shouldNotDump');
   });
 
-  it('renders evidence_list', () => {
+  it('renders evidence_list as collapsed evidence sources', () => {
     const markup = render(widget({
       id: 'evidence',
       type: 'evidence_list',
@@ -176,6 +185,10 @@ describe('ui registry widget renderer', () => {
       }],
     }));
 
+    expect(markup).toContain('Evidence (1)');
+    expect(markup).toContain('View Evidence');
+    expect(markup).toContain('data-testid="evidence-sources-detail"');
+    expect(markup).not.toMatch(/data-testid="evidence-sources-detail"[^>]*open/);
     expect(markup).toContain('Workorder WO-100');
     expect(markup).toContain('Source: maintenance_db');
     expect(markup).toContain('/workorders/WO-100');

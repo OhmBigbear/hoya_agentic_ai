@@ -137,7 +137,10 @@ export function parseWorkorderRuntimeResponse(
 
   const workspacePayload = getRecord(record.workspace_payload);
   const canonicalRecord = workspacePayload ?? record;
-  const traceMetadata = getRecord(record.trace_metadata) ?? getRecord(canonicalRecord.trace_metadata);
+  const traceMetadata = getRecord(record.trace_metadata)
+    ?? getRecord(record.trace)
+    ?? getRecord(canonicalRecord.trace_metadata)
+    ?? getRecord(canonicalRecord.trace);
   const payloadVersion = normalizeRuntimePayloadVersion(
     optionalText(canonicalRecord.payload_version)
       ?? optionalText(record.payload_version)
@@ -153,9 +156,9 @@ export function parseWorkorderRuntimeResponse(
     payload_version: payloadVersion ?? diagnostics.payload_version,
   };
 
-  const hasLegacyRuntimeEnvelope = Boolean(
+  const hasRuntimeResponseEnvelope = Boolean(
     payloadVersion
-    && traceMetadata
+    && (traceMetadata || traceId)
     && (
       Array.isArray(record.widgets)
       || Array.isArray(record.readonly_actions)
@@ -180,7 +183,7 @@ export function parseWorkorderRuntimeResponse(
     )
   );
 
-  if (!hasLegacyRuntimeEnvelope && !hasWorkspacePayloadEnvelope) {
+  if (!hasRuntimeResponseEnvelope && !hasWorkspacePayloadEnvelope) {
     return invalidRuntimeResponse('Runtime response did not match the Workorder Agent payload envelope', nextDiagnostics);
   }
 

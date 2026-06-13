@@ -24,6 +24,7 @@ import {
 import type { MaintenanceDashboardSummary, MaintenanceWorkOrder } from '../src/types/maintenance';
 import type { WorkspacePayload } from '../src/types/operationsWorkspace';
 import {
+  agenticCoreFastPathCostIntelligenceResponse,
   fullWorkorderAgentPayload,
   malformedWorkorderAgentPayload,
   runtimeWorkorderAgentResponse,
@@ -305,6 +306,126 @@ describe('workorder widget developer preview', () => {
     expect(markup).toContain('Runtime response');
     expect(markup).toContain('Agentic Core found repeated open corrective work on POLISHING-7A');
     expect(markup).not.toContain('RX1-GC-TN-50');
+    expect(markup).not.toContain('Local preview response');
+  });
+
+  it('renders fast path cost_intelligence narrative without local preview fallback', async () => {
+    const runtimeRequest = vi.fn(async () => ({
+      status: 'success' as const,
+      source: 'runtime' as const,
+      payload: agenticCoreFastPathCostIntelligenceResponse,
+      requestedAt: '2026-06-12T08:00:00.000Z',
+      completedAt: '2026-06-12T08:00:01.000Z',
+      diagnostics: {
+        request_source: 'hoya_ui.copilot_submit',
+        runtime_trace_id: 'trace-fast-path-cost-intelligence-023',
+        payload_version: '1.0',
+        response_status: 200,
+      },
+    }));
+    const previewRequest = vi.fn(async () => previewResponse);
+
+    const response = await requestMaintenanceCopilotAssistantResponse({
+      prompt: 'Investigate BMM26-02465 cost risk',
+      filters: { status: 'open' },
+      workspaceState: createInitialOperationsWorkspaceState(),
+      selectedWorkorder,
+      previewRequest,
+      runtimeRequest,
+    });
+
+    expect(response.source).toBe('runtime');
+    expect(previewRequest).not.toHaveBeenCalled();
+    const model = buildWorkorderWidgetPreviewModel(agenticCoreFastPathCostIntelligenceResponse);
+    expect(model.diagnostics.runtimeDiagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'fast_path',
+          section: 'cost_intelligence',
+        }),
+        expect.objectContaining({
+          code: 'cost_estimate_context_mismatch',
+          section: 'cost_estimate',
+          severity: 'warning',
+        }),
+      ]),
+    );
+
+    const content = response.source === 'runtime'
+      ? extractRuntimeAssistantText(response.runtimeResult.payload)
+      : response.preview.assistant_text;
+    const markup = renderToStaticMarkup(
+      <MaintenanceAssistantPanel
+        isOpen
+        onClose={() => {}}
+        messages={[{
+          id: 1,
+          role: 'assistant',
+          content,
+          timestamp: '12:00',
+          responseSource: response.source,
+          narrative: response.source === 'runtime'
+            ? (response.runtimeResult.payload as typeof agenticCoreFastPathCostIntelligenceResponse).narrative
+            : undefined,
+          runtimePayload: response.source === 'runtime' ? response.runtimeResult.payload : undefined,
+        }]}
+        inputMessage=""
+        setInputMessage={() => {}}
+        onSendMessage={() => {}}
+        summary={summary}
+      />,
+    );
+
+    expect(markup).toContain('data-testid="maintenance-copilot-runtime-badge"');
+    expect(markup).toContain('Cost intelligence fast path completed for BMM26-02465');
+    expect(markup).toContain('Executive Summary');
+    expect(markup).toContain('Key Findings');
+    expect(markup).toContain('Bearing replacement and technician time drive most of the estimate.');
+    expect(markup).toContain('Business Impact');
+    expect(markup).toContain('Unvalidated cost rows can overstate the selected workorder estimate');
+    expect(markup).toContain('Cost variance risk remains elevated until the mismatched row is removed.');
+    expect(markup).toContain('Recommended Next Steps');
+    expect(markup).toContain('Validate cost rows against BMM26-02465 before scheduling.');
+    expect(markup).toContain('Review the mismatched workorder row separately.');
+    expect(markup).toContain('Confidence 0.91');
+    expect(markup).toContain('Fast path evidence matches selected workorder');
+    expect(markup).toContain('Cost estimates remain advisory until finance validates the spare-part price.');
+    expect(markup).not.toContain('Runtime trace: trace-fast-path-cost-intelligence-023');
+    expect(markup).not.toContain('data-testid="maintenance-copilot-local-preview-badge"');
+    expect(markup).not.toContain('Local preview response');
+  });
+
+  it('renders fast path summary.text as Markdown when narrative is missing', () => {
+    const payload = {
+      ...agenticCoreFastPathCostIntelligenceResponse,
+      narrative: undefined,
+    };
+    const content = extractRuntimeAssistantText(payload);
+    const markup = renderToStaticMarkup(
+      <MaintenanceAssistantPanel
+        isOpen
+        onClose={() => {}}
+        messages={[{
+          id: 1,
+          role: 'assistant',
+          content,
+          timestamp: '12:00',
+          responseSource: 'runtime',
+          runtimePayload: payload,
+        }]}
+        inputMessage=""
+        setInputMessage={() => {}}
+        onSendMessage={() => {}}
+        summary={summary}
+      />,
+    );
+
+    expect(content).toContain('## Cost Intelligence Workorder Investigation');
+    expect(markup).toContain('data-testid="maintenance-copilot-runtime-badge"');
+    expect(markup).toContain('Cost Intelligence Workorder Investigation');
+    expect(markup).toContain('The selected workorder BMM26-02465 has a concentrated cost estimate');
+    expect(markup).not.toContain('Runtime trace: trace-fast-path-cost-intelligence-023');
+    expect(markup).not.toContain('data-testid="maintenance-copilot-local-preview-badge"');
     expect(markup).not.toContain('Local preview response');
   });
 

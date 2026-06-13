@@ -210,6 +210,7 @@ export function normalizeWorkorderAgentPayload(payload: unknown): NormalizedWork
     error,
     runtimeDiagnostics: [
       ...normalizeRuntimeDiagnostics(record.diagnostics),
+      ...normalizeCostEstimateDiagnostics(record, root),
       ...runtimeWidgetResult.rejectedWidgets.map((widget): WorkorderRuntimeDiagnostic => ({
         code: 'runtime_widget_rejected',
         message: widget.reason,
@@ -278,6 +279,32 @@ export function adaptWorkorderAgentPayloadToWidgets(
     });
   });
 
+  if (normalized.narrative) {
+    widgets.push({
+      id: widgetId('narrative'),
+      type: 'narrative_panel',
+      regionId: 'maintenance.workorders.copilot',
+      title: 'Agent narrative',
+      executiveSummary: normalized.narrative.executiveSummary,
+      keyFindings: normalized.narrative.keyFindings,
+      reasoning: normalized.narrative.reasoning,
+      risks: normalized.narrative.risks,
+      businessImpact: normalized.narrative.businessImpact,
+      recommendedNextSteps: normalized.narrative.recommendedNextSteps,
+      evidence: normalized.narrative.evidence,
+      confidence: normalized.narrative.confidence,
+      riskLevel: normalized.summary?.severity,
+      businessImpactStatus: normalized.narrative.businessImpact ? 'assessed' : undefined,
+      validationRequired: normalized.summary?.limitations.some((limitation) => /human|review|validat|confirm|required/i.test(limitation)),
+      traceRefs,
+      evidenceRefs,
+      metadata: {
+        generatedAt: normalized.generatedAt,
+        limitations: normalized.summary?.limitations,
+      },
+    });
+  }
+
   if (normalized.recommendations.length > 0) {
     widgets.push({
       id: widgetId('insights'),
@@ -296,25 +323,6 @@ export function adaptWorkorderAgentPayloadToWidgets(
           relatedRefs: item.related_refs,
         },
       })),
-      traceRefs,
-      evidenceRefs,
-    });
-  }
-
-  if (normalized.narrative) {
-    widgets.push({
-      id: widgetId('narrative'),
-      type: 'narrative_panel',
-      regionId: 'maintenance.workorders.copilot',
-      title: 'Agent narrative',
-      executiveSummary: normalized.narrative.executiveSummary,
-      keyFindings: normalized.narrative.keyFindings,
-      reasoning: normalized.narrative.reasoning,
-      risks: normalized.narrative.risks,
-      businessImpact: normalized.narrative.businessImpact,
-      recommendedNextSteps: normalized.narrative.recommendedNextSteps,
-      evidence: normalized.narrative.evidence,
-      confidence: normalized.narrative.confidence,
       traceRefs,
       evidenceRefs,
     });
@@ -424,6 +432,7 @@ function getRuntimePayloadRecord(root: WorkorderAgentPayloadRecord | null | unde
     || root.widgets
     || root.readonly_actions
     || root.trace_metadata
+    || root.trace
   ) {
     return root;
   }
@@ -663,6 +672,94 @@ function normalizeRuntimeDiagnostics(value: unknown): WorkorderRuntimeDiagnostic
   }));
 }
 
+function normalizeCostEstimateDiagnostics(
+  record: WorkorderAgentPayloadRecord,
+  root: WorkorderAgentPayloadRecord | null | undefined,
+): WorkorderRuntimeDiagnostic[] {
+  const costMetadata = getCostEstimateMetadata(record) ?? getCostEstimateMetadata(root);
+  if (!costMetadata) {
+    return [];
+  }
+
+  const selected = getSelectedRuntimeContext(record, root);
+  if (!selected.workorderNo && !selected.machineId) {
+    return [];
+  }
+
+  const rows = getCostEstimateRows(costMetadata);
+  if (rows.length === 0) {
+    return [];
+  }
+
+  const mismatches = rows.filter((row) => {
+    const rowWorkorder = getText(row.workorder_no ?? row.workorder_id ?? row.workorderNo ?? row.id);
+    const rowMachine = getText(row.machine_id ?? row.equipment_no ?? row.machine ?? row.machineId ?? row.equipmentNo);
+    return Boolean(
+      selected.workorderNo && rowWorkorder && rowWorkorder !== selected.workorderNo
+      || selected.machineId && rowMachine && rowMachine !== selected.machineId,
+    );
+  });
+
+  if (mismatches.length === 0) {
+    return [];
+  }
+
+  return [{
+    code: 'cost_estimate_context_mismatch',
+    message: `${mismatches.length} cost estimate row${mismatches.length === 1 ? '' : 's'} did not match the selected workorder or machine.`,
+    severity: 'warning',
+    section: 'cost_estimate',
+  }];
+}
+
+function getCostEstimateMetadata(record: WorkorderAgentPayloadRecord | null | undefined): WorkorderAgentPayloadRecord | undefined {
+  if (!record) {
+    return undefined;
+  }
+
+  return getRecord(record.cost_estimate_metadata)
+    ?? getRecord(record.cost_estimate)
+    ?? getRecord(record.cost_intelligence)
+    ?? getRecord(getRecord(record.metadata)?.cost_estimate)
+    ?? getRecord(getRecord(record.diagnostics)?.cost_estimate);
+}
+
+function getCostEstimateRows(metadata: WorkorderAgentPayloadRecord): WorkorderAgentPayloadRecord[] {
+  return [
+    ...normalizeRecordArray(metadata.rows),
+    ...normalizeRecordArray(metadata.cost_rows),
+    ...normalizeRecordArray(metadata.items),
+    ...normalizeRecordArray(metadata.estimates),
+  ];
+}
+
+function getSelectedRuntimeContext(
+  record: WorkorderAgentPayloadRecord,
+  root: WorkorderAgentPayloadRecord | null | undefined,
+): { workorderNo?: string; machineId?: string } {
+  const requestContext = getRecord(root?.request_context) ?? getRecord(record.request_context) ?? getRecord(root?.context) ?? getRecord(record.context);
+  const workspaceState = getRecord(requestContext?.workspace_state)
+    ?? getRecord(root?.workspace_state)
+    ?? getRecord(record.workspace_state);
+
+  return {
+    workorderNo: getText(
+      workspaceState?.selected_workorder_id
+        ?? requestContext?.selected_workorder_id
+        ?? requestContext?.workorder_no
+        ?? root?.workorder_no
+        ?? record.workorder_no,
+    ),
+    machineId: getText(
+      workspaceState?.selected_machine_id
+        ?? requestContext?.selected_machine_id
+        ?? requestContext?.machine_id
+        ?? root?.machine_id
+        ?? record.machine_id,
+    ),
+  };
+}
+
 function normalizeTraceMetadata(
   root: WorkorderAgentPayloadRecord | null | undefined,
   record: WorkorderAgentPayloadRecord,
@@ -813,6 +910,18 @@ function normalizeEvidenceRefs(value: unknown): UiEvidenceRef[] {
 }
 
 function normalizeNarrative(value: unknown): WorkorderAgentNarrative | undefined {
+  const text = getText(value);
+  if (text) {
+    return {
+      executiveSummary: text,
+      keyFindings: [],
+      reasoning: [],
+      risks: [],
+      recommendedNextSteps: [],
+      evidence: [],
+    };
+  }
+
   const record = getRecord(value);
   if (!record) {
     return undefined;

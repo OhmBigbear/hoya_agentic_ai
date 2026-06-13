@@ -1017,14 +1017,14 @@ export function extractRuntimeAssistantText(payload: unknown): string {
   const candidate = workspacePayload ?? record;
   const summary = getRecord(candidate?.summary);
   const narrative = getRecord(candidate?.narrative);
-  const traceMetadata = getRecord(record?.trace_metadata) ?? getRecord(candidate?.trace_metadata);
+  const narrativeText = getText(candidate?.narrative);
+  const narrativeSectionText = narrative ? formatNarrativeSectionsAsMarkdown(narrative.sections) : undefined;
+  const summaryText = getText(summary?.text ?? summary?.body ?? summary?.markdown);
   const headline = getText(summary?.headline);
   const executiveSummary = getText(narrative?.executive_summary ?? narrative?.executiveSummary);
   const title = getText(summary?.title);
-  const traceId = getText(traceMetadata?.trace_id);
   const lines = [
-    headline ?? executiveSummary ?? title ?? 'Runtime workorder analysis is ready.',
-    traceId ? `Runtime trace: ${traceId}` : undefined,
+    narrativeSectionText ?? narrativeText ?? summaryText ?? headline ?? executiveSummary ?? title ?? 'Runtime workorder analysis is ready.',
   ].filter(Boolean);
 
   return lines.join('\n\n');
@@ -2741,6 +2741,7 @@ function buildNarrativeWidgetFromUnknown(
   if (!record) {
     return null;
   }
+  const narrativeSections = normalizeNarrativeSections(record.sections);
 
   const widget: Extract<UiWidget, { type: 'narrative_panel' }> = {
     id,
@@ -2749,28 +2750,213 @@ function buildNarrativeWidgetFromUnknown(
     title,
     assessmentHeader: getText(record.assessment_header ?? record.assessmentHeader ?? record.workorder_review ?? record.workorderReview),
     probableFailure: getText(record.probable_failure ?? record.probableFailure ?? record.probable_failure_mode ?? record.probableFailureMode ?? record.what_failed ?? record.whatFailed),
-    executiveSummary: getText(record.executive_summary ?? record.executiveSummary ?? record.summary),
-    keyFindings: getTextItems(record.key_findings ?? record.keyFindings ?? record.findings),
+    executiveSummary: getText(record.executive_summary ?? record.executiveSummary ?? record.summary) ?? narrativeSections.executiveSummary,
+    keyFindings: [
+      ...getTextItems(record.key_findings ?? record.keyFindings ?? record.findings),
+      ...narrativeSections.keyFindings,
+    ],
     risks: getTextItems(record.risks ?? record.risk),
-    reasoning: getTextItems(record.reasoning ?? record.reasoning_steps ?? record.reasoningSteps),
-    businessImpact: getText(record.business_impact ?? record.businessImpact ?? record.impact),
-    recommendedNextSteps: getTextItems(
-      record.recommended_next_steps
-        ?? record.recommendedNextSteps
-        ?? record.next_steps
-        ?? record.nextSteps
-        ?? record.recommendations,
-    ),
+    reasoning: [
+      ...getTextItems(record.reasoning ?? record.reasoning_steps ?? record.reasoningSteps),
+      ...getTextItems(narrativeSections.confidenceRationale),
+    ],
+    businessImpact: getText(record.business_impact ?? record.businessImpact ?? record.impact) ?? narrativeSections.businessImpact,
+    recommendedNextSteps: [
+      ...getTextItems(
+        record.recommended_next_steps
+          ?? record.recommendedNextSteps
+          ?? record.next_steps
+          ?? record.nextSteps
+          ?? record.recommendations,
+      ),
+      ...narrativeSections.recommendedNextSteps,
+    ],
     evidence: getTextItems(record.supporting_evidence ?? record.supportingEvidence ?? record.evidence ?? record.evidence_refs ?? record.evidenceRefs),
-    limitations: getTextItems(record.limitations ?? record.limits),
+    limitations: [
+      ...getTextItems(record.limitations ?? record.limits),
+      ...narrativeSections.limitations,
+    ],
     bottomLine: getText(record.bottom_line ?? record.bottomLine),
-    confidence: getText(record.confidence_level ?? record.confidenceLevel ?? record.confidence) ?? (typeof record.confidence === 'number' ? record.confidence : undefined),
+    confidence: getText(record.confidence_level ?? record.confidenceLevel ?? record.confidence) ?? (typeof record.confidence === 'number' ? record.confidence : undefined) ?? narrativeSections.confidence,
     riskLevel: getText(record.severity ?? record.risk_level ?? record.riskLevel) ?? payload?.summary.severity,
-    businessImpactStatus: record.business_impact || record.businessImpact || record.impact ? 'assessed' : undefined,
+    businessImpactStatus: record.business_impact || record.businessImpact || record.impact || narrativeSections.businessImpact ? 'assessed' : undefined,
     validationRequired: Boolean(record.validation_required ?? record.validationRequired ?? payload?.summary.limitations.some((limitation) => /human|review|validat|confirm|required/i.test(limitation))),
   };
 
   return hasNarrativeWidgetContent(widget) ? widget : null;
+}
+
+function formatNarrativeSectionsAsMarkdown(value: unknown): string | undefined {
+  const sections = normalizeNarrativeSectionEntries(value);
+  if (sections.length === 0) {
+    return undefined;
+  }
+
+  return sections.map((section) => `## ${section.title}\n${section.items.join('\n')}`).join('\n\n');
+}
+
+function normalizeNarrativeSections(value: unknown): {
+  executiveSummary?: string;
+  keyFindings: string[];
+  businessImpact?: string;
+  recommendedNextSteps: string[];
+  confidence?: string | number | null;
+  confidenceRationale?: string;
+  limitations: string[];
+} {
+  const result: {
+    executiveSummary?: string;
+    keyFindings: string[];
+    businessImpact?: string;
+    recommendedNextSteps: string[];
+    confidence?: string | number | null;
+    confidenceRationale?: string;
+    limitations: string[];
+  } = {
+    keyFindings: [],
+    recommendedNextSteps: [],
+    limitations: [],
+  };
+
+  normalizeNarrativeSectionEntries(value).forEach((section) => {
+    const sectionKey = normalizeNarrativeSectionTitle(section.title);
+    if (sectionKey === 'executive summary') {
+      result.executiveSummary = section.items.join('\n');
+    } else if (sectionKey === 'key findings') {
+      result.keyFindings.push(...section.items);
+    } else if (sectionKey === 'business impact') {
+      result.businessImpact = section.items.join('\n');
+    } else if (sectionKey === 'recommended next steps' || sectionKey === 'next steps') {
+      result.recommendedNextSteps.push(...section.items);
+    } else if (sectionKey === 'confidence') {
+      result.confidence = section.confidence ?? section.items[0];
+      if (section.rationale) {
+        result.confidenceRationale = section.rationale;
+      }
+      result.limitations.push(...section.limitations);
+    }
+  });
+
+  return result;
+}
+
+function normalizeNarrativeSectionEntries(value: unknown): Array<{
+  title: string;
+  items: string[];
+  confidence?: string | number | null;
+  rationale?: string;
+  limitations: string[];
+}> {
+  const fromArray = Array.isArray(value)
+    ? value.map((item) => {
+      const record = getRecord(item);
+      if (!record) {
+        const text = getText(item);
+        return text ? { title: 'Narrative', items: [text], limitations: [] } : null;
+      }
+
+      const title = getText(record.title ?? record.heading ?? record.name ?? record.label ?? record.section ?? record.id);
+      const section = normalizeNarrativeSectionRecord(title, record);
+      return section;
+    }).filter((item): item is { title: string; items: string[]; confidence?: string | number | null; rationale?: string; limitations: string[] } => item !== null)
+    : [];
+
+  if (fromArray.length > 0) {
+    return fromArray;
+  }
+
+  const record = getRecord(value);
+  if (!record) {
+    return [];
+  }
+
+  return Object.entries(record).map(([key, itemValue]) => {
+    const sectionRecord = getRecord(itemValue);
+    if (sectionRecord) {
+      return normalizeNarrativeSectionRecord(labelFromField(key), sectionRecord);
+    }
+
+    const items = getTextItems(itemValue);
+    return items.length > 0 ? { title: labelFromField(key), items, limitations: [] } : null;
+  }).filter((item): item is { title: string; items: string[]; confidence?: string | number | null; rationale?: string; limitations: string[] } => item !== null);
+}
+
+function normalizeNarrativeSectionRecord(
+  fallbackTitle: string | undefined,
+  record: Record<string, unknown>,
+): {
+  title: string;
+  items: string[];
+  confidence?: string | number | null;
+  rationale?: string;
+  limitations: string[];
+} | null {
+  const title = fallbackTitle ?? getText(record.title ?? record.heading ?? record.name ?? record.label ?? record.section ?? record.id);
+  if (!title) {
+    return null;
+  }
+
+  const items = getTextItems(record.items ?? record.bullets ?? record.points ?? record.content ?? record.text ?? record.body ?? record.summary);
+  const confidence = normalizeConfidenceValue(record);
+  const rationale = getText(record.rationale ?? record.reason ?? record.explanation);
+  const limitations = getTextItems(record.limitations ?? record.limits);
+  const confidenceItems = [
+    getText(record.label) && confidence !== undefined ? `Label: ${getText(record.label)}` : undefined,
+    confidence !== undefined ? `Score: ${formatNarrativeConfidence(confidence)}` : undefined,
+    rationale ? `Rationale: ${rationale}` : undefined,
+    ...limitations.map((limitation) => `Limitation: ${limitation}`),
+  ].filter((item): item is string => Boolean(item));
+  const sectionItems = items.length > 0 ? items : confidenceItems;
+
+  if (sectionItems.length === 0) {
+    return null;
+  }
+
+  return {
+    title,
+    items: sectionItems,
+    confidence,
+    rationale,
+    limitations,
+  };
+}
+
+function normalizeConfidenceValue(record: Record<string, unknown>): string | number | null | undefined {
+  const value = record.score ?? record.value ?? record.confidence;
+  if (typeof value === 'number') {
+    return value;
+  }
+  return getText(value);
+}
+
+function formatNarrativeConfidence(value: string | number | null): string {
+  return value === null ? 'not provided' : String(value);
+}
+
+function normalizeNarrativeSectionTitle(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/[_-]+/g, ' ');
+  if (/executive|summary/.test(normalized)) {
+    return 'executive summary';
+  }
+  if (/finding/.test(normalized)) {
+    return 'key findings';
+  }
+  if (/business|impact/.test(normalized)) {
+    return 'business impact';
+  }
+  if (/recommend|next step|action/.test(normalized)) {
+    return 'recommended next steps';
+  }
+  if (/confidence/.test(normalized)) {
+    return 'confidence';
+  }
+  return normalized;
+}
+
+function labelFromField(field: string): string {
+  return field
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function buildNarrativeWidgetFromMarkdown(content: string): Extract<UiWidget, { type: 'narrative_panel' }> | null {

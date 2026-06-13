@@ -20,6 +20,7 @@ import {
   buildWorkorderWidgetPreviewModel,
 } from '../src/ui-registry';
 import {
+  agenticCoreFastPathCostIntelligenceResponse,
   agenticCoreWorkspaceRuntimeResponse,
   agenticCoreWorkspaceRuntimeResponseV1Alias,
   runtimeWorkorderAgentResponse,
@@ -239,6 +240,26 @@ describe('workorder agent runtime API', () => {
       runtime_trace_id: 'trace-agentic-core-workspace-022',
       payload_version: '1.0',
     });
+  });
+
+  it('accepts Agentic Core fast path cost_intelligence response envelopes', async () => {
+    const result = await requestWorkorderAgentRuntime(runtimeRequest, {
+      baseUrl: 'https://agentic-core.example.com',
+      path: '/api/workorder-agent/runtime',
+      fetchImpl: vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(agenticCoreFastPathCostIntelligenceResponse), { status: 200 }),
+      ),
+      now: fixedClock(),
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.source).toBe('runtime');
+    expect(result.status === 'success' ? result.payload : null).toEqual(agenticCoreFastPathCostIntelligenceResponse);
+    expect(result.diagnostics).toMatchObject({
+      runtime_trace_id: 'trace-fast-path-cost-intelligence-023',
+      payload_version: '1.0',
+    });
+    expect(result.diagnostics.error_code).toBeUndefined();
   });
 
   it('handles successful runtime payload envelopes', async () => {
@@ -554,6 +575,32 @@ describe('workorder agent runtime API', () => {
       payload_version: '2.0',
     });
     expect(model.widgets.some((widget) => widget.id === 'runtime-open-workorders')).toBe(true);
+  });
+
+  it('fast path cost_intelligence responses normalize through the existing widget adapter with warnings', () => {
+    const model = buildWorkorderWidgetPreviewModel(agenticCoreFastPathCostIntelligenceResponse);
+
+    expect(model.safeToRender).toBe(true);
+    expect(model.diagnostics.traceMetadata).toMatchObject({
+      trace_id: 'trace-fast-path-cost-intelligence-023',
+      agent_id: 'workorder-agent',
+      run_id: 'run-fast-path-cost-intelligence-023',
+      payload_version: 'v1',
+    });
+    expect(model.diagnostics.runtimeDiagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'fast_path',
+          section: 'cost_intelligence',
+        }),
+        expect.objectContaining({
+          code: 'cost_estimate_context_mismatch',
+          section: 'cost_estimate',
+          severity: 'warning',
+        }),
+      ]),
+    );
+    expect(model.widgets.some((widget) => widget.id === 'fast-path-cost-summary')).toBe(true);
   });
 
   it('Agentic Core workspace_payload responses normalize through the existing widget adapter', () => {
