@@ -322,6 +322,43 @@ try {
   assert.doesNotMatch(assistantMarkup, new RegExp(staleTemplateText));
   assert.doesNotMatch(assistantMarkup, new RegExp(staleFallbackText));
 
+  const markdownMarkup = renderToStaticMarkup(React.createElement(page.MaintenanceAssistantPanel, {
+    isOpen: true,
+    onClose: () => {},
+    messages: [
+      {
+        id: 1,
+        role: 'assistant',
+        content: '## Response Overview\n\n**Priority:** inspect `WO-2026-001`.\n\n- Check spindle vibration\n- Confirm operator log\n\n1. Lock out machine\n2. Inspect bearing\n\n> Validate against the source workorder.\n\n---\n\n<script>alert("x")</script><img src="x" onerror="alert(1)" />',
+        timestamp: '12:05',
+      },
+      {
+        id: 2,
+        role: 'user',
+        content: '## User Heading\n\n**literal user text**\n\n- not a rendered list',
+        timestamp: '12:06',
+      },
+    ],
+    inputMessage: '',
+    setInputMessage: () => {},
+    onSendMessage: () => {},
+    summary,
+    workspaceState: runtimeState,
+  }));
+  assert.match(markdownMarkup, /<h2[^>]*>Response Overview<\/h2>/);
+  assert.match(markdownMarkup, /<strong[^>]*>Priority:<\/strong>/);
+  assert.match(markdownMarkup, /<li[^>]*>Check spindle vibration<\/li>/);
+  assert.match(markdownMarkup, /<li[^>]*>Lock out machine<\/li>/);
+  assert.match(markdownMarkup, /<blockquote[^>]*>/);
+  assert.match(markdownMarkup, /<code[^>]*>WO-2026-001<\/code>/);
+  assert.match(markdownMarkup, /<hr[^>]*\/>/);
+  assert.doesNotMatch(markdownMarkup, /<script/i);
+  assert.doesNotMatch(markdownMarkup, /<img/i);
+  assert.doesNotMatch(markdownMarkup, /onerror/i);
+  assert.doesNotMatch(markdownMarkup, /<h2[^>]*>User Heading<\/h2>/);
+  assert.match(markdownMarkup, /## User Heading/);
+  assert.match(markdownMarkup, /\*\*literal user text\*\*/);
+
   const payloadMarkup = renderToStaticMarkup(React.createElement(page.MaintenanceAssistantPanel, {
     isOpen: true,
     onClose: () => {},
