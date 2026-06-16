@@ -274,6 +274,7 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
   const copilotSubmitInFlightRef = useRef(false);
   const copilotSubmitSequenceRef = useRef(0);
   const copilotRuntimeSuccessSequenceRef = useRef(0);
+  const copilotSessionIdRef = useRef<string | null>(null);
   const [, setWorkorderWidgetShadowDiagnostics] = useState<WorkorderWidgetShadowDiagnostics | null>(null);
   const [runtimeFetchDiagnostics, setRuntimeFetchDiagnostics] = useState<RuntimeFetchDiagnosticsState>({
     status: 'idle',
@@ -357,6 +358,10 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
   );
   const selectedWorkorder = selectedWorkorderNo ? workorders.find((workorder) => workorder.workorder_no === selectedWorkorderNo) || detailState[selectedWorkorderNo]?.detail : undefined;
   const totalPages = Math.max(1, Math.ceil(totalWorkorders / pageSize));
+
+  useEffect(() => {
+    copilotSessionIdRef.current = null;
+  }, [selectedWorkorderNo]);
 
   useEffect(() => {
     if (!selectedWorkorderNo) {
@@ -501,6 +506,7 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
         filters: previewFilters,
         workspaceState: operationsWorkspace.state,
         selectedWorkorder,
+        sessionId: copilotSessionIdRef.current,
         previewRequest,
         runtimeRequest,
       });
@@ -520,6 +526,9 @@ export function MaintenanceWorkorderTrackingPage({ sidebarCollapsed, services = 
 
       if (response.source === 'runtime') {
         copilotRuntimeSuccessSequenceRef.current = submitSequence;
+        if (response.runtimeResult.session_id) {
+          copilotSessionIdRef.current = response.runtimeResult.session_id;
+        }
         setMessages((current) => [
           ...current,
           {
@@ -855,6 +864,7 @@ export interface MaintenanceCopilotRuntimeRoutingContext {
   filters: Record<string, unknown>;
   workspaceState: ReturnType<typeof useOperationsWorkspaceRuntime>['state'];
   selectedWorkorder?: MaintenanceWorkOrder;
+  sessionId?: string | null;
 }
 
 export interface MaintenanceCopilotAssistantResponseInput extends MaintenanceCopilotRuntimeRoutingContext {
@@ -919,12 +929,14 @@ export function buildMaintenanceCopilotRuntimeRequest({
   filters,
   workspaceState,
   selectedWorkorder,
+  sessionId,
 }: MaintenanceCopilotRuntimeRoutingContext): WorkorderAgentRuntimeRequest {
   const detectedWorkorderNo = extractWorkorderNoFromCopilotPrompt(prompt);
   const selectedWorkorderId = detectedWorkorderNo ?? workspaceState.selectedWorkorderId ?? selectedWorkorder?.workorder_no;
   const selectedMachineId = workspaceState.selectedMachineId ?? selectedWorkorder?.equipment_no;
+  const normalizedSessionId = typeof sessionId === 'string' && sessionId.trim().length > 0 ? sessionId.trim() : undefined;
 
-  return {
+  const request: WorkorderAgentRuntimeRequest = {
     query: prompt,
     workorder_no: selectedWorkorderId,
     surface_id: maintenanceWorkordersSurfaceId,
@@ -944,6 +956,11 @@ export function buildMaintenanceCopilotRuntimeRequest({
       },
     },
   };
+  if (normalizedSessionId) {
+    request.session_id = normalizedSessionId;
+  }
+
+  return request;
 }
 
 export async function requestMaintenanceCopilotAssistantResponse({

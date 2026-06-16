@@ -4,6 +4,7 @@ export const WORKORDER_RUNTIME_RESPONSE_PAYLOAD_VERSION = '2.0';
 export interface WorkorderRuntimeRequestInput {
   query?: string;
   question?: string;
+  session_id?: string;
   surface_id: string;
   request_source: string;
   workorder_no?: string;
@@ -23,6 +24,7 @@ export interface WorkorderRuntimeRequestContext extends Record<string, unknown> 
 
 export interface WorkorderRuntimeRequestEnvelope {
   query: string;
+  session_id?: string;
   surface_id: string;
   request_source: string;
   workorder_no?: string;
@@ -88,6 +90,7 @@ export interface ParsedWorkorderRuntimeResponse {
   ok: boolean;
   payload: unknown;
   diagnostics: WorkorderRuntimeContractDiagnostics;
+  session_id?: string;
   reason?: string;
 }
 
@@ -116,6 +119,10 @@ export function buildWorkorderRuntimeRequest(
     request_source: requiredText(input.request_source),
     context,
   };
+  const sessionId = optionalText(input.session_id);
+  if (sessionId) {
+    request.session_id = sessionId;
+  }
   if (workorderNo) {
     request.workorder_no = workorderNo;
   }
@@ -149,6 +156,7 @@ export function parseWorkorderRuntimeResponse(
   const traceId = optionalText(record.trace_id)
     ?? optionalText(canonicalRecord.trace_id)
     ?? optionalText(traceMetadata?.trace_id);
+  const sessionId = optionalText(record.session_id);
 
   const nextDiagnostics: WorkorderRuntimeContractDiagnostics = {
     ...diagnostics,
@@ -191,6 +199,7 @@ export function parseWorkorderRuntimeResponse(
     ok: true,
     payload,
     diagnostics: nextDiagnostics,
+    session_id: sessionId,
   };
 }
 

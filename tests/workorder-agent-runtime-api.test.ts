@@ -168,6 +168,18 @@ describe('workorder agent runtime API', () => {
     });
   });
 
+  it('omits session_id when absent, null, or empty', () => {
+    expect(buildWorkorderRuntimeRequest(runtimeRequest)).not.toHaveProperty('session_id');
+    expect(buildWorkorderRuntimeRequest({ ...runtimeRequest, session_id: null as unknown as string })).not.toHaveProperty('session_id');
+    expect(buildWorkorderRuntimeRequest({ ...runtimeRequest, session_id: '   ' })).not.toHaveProperty('session_id');
+  });
+
+  it('includes session_id when provided', () => {
+    expect(buildWorkorderRuntimeRequest({ ...runtimeRequest, session_id: ' session-workorder-026b ' })).toMatchObject({
+      session_id: 'session-workorder-026b',
+    });
+  });
+
   it('includes RCA approval creation only when explicitly requested in context', () => {
     const defaultRequest = buildWorkorderRuntimeRequest(runtimeRequest, () => 'default-trace');
     const approvalRequest = buildWorkorderRuntimeRequest({
@@ -212,6 +224,33 @@ describe('workorder agent runtime API', () => {
       runtime_trace_id: 'trace-runtime-workorder-021',
       payload_version: '2.0',
     });
+  });
+
+  it('extracts top-level session_id from runtime responses', () => {
+    const parsed = parseWorkorderRuntimeResponse({
+      ...runtimeWorkorderAgentResponse,
+      session_id: ' session-workorder-026b ',
+    });
+
+    expect(parsed.ok).toBe(true);
+    expect(parsed.session_id).toBe('session-workorder-026b');
+  });
+
+  it('returns parsed session_id from successful runtime requests', async () => {
+    const result = await requestWorkorderAgentRuntime(runtimeRequest, {
+      baseUrl: 'https://agentic-core.example.com',
+      path: '/api/runtime/workorder-agent',
+      fetchImpl: vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({
+          ...runtimeWorkorderAgentResponse,
+          session_id: 'session-workorder-026b',
+        }), { status: 200 }),
+      ),
+      now: fixedClock(),
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.status === 'success' ? result.session_id : undefined).toBe('session-workorder-026b');
   });
 
   it('accepts Agentic Core workspace_payload runtime responses', () => {

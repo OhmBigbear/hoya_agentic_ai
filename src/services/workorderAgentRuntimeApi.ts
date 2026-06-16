@@ -28,6 +28,7 @@ export interface WorkorderAgentRuntimeSuccess {
   status: 'success';
   source: 'runtime';
   payload: unknown;
+  session_id?: string;
   requestedAt: string;
   completedAt: string;
   diagnostics: WorkorderRuntimeContractDiagnostics;
@@ -148,6 +149,7 @@ export async function requestWorkorderAgentRuntime(
       status: 'success',
       source: 'runtime',
       payload: parsed.payload,
+      session_id: parsed.session_id,
       requestedAt,
       completedAt,
       diagnostics: parsed.diagnostics,

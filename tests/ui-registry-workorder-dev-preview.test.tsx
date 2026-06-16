@@ -10,6 +10,7 @@ vi.hoisted(() => {
 });
 
 import {
+  buildMaintenanceCopilotRuntimeRequest,
   extractRuntimeAssistantText,
   DeveloperWidgetRegistryPreview,
   requestMaintenanceCopilotAssistantResponse,
@@ -279,6 +280,146 @@ describe('workorder widget developer preview', () => {
     });
     expect(runtimeRequest.mock.calls[0][0]).not.toHaveProperty('selected_workorder_id');
     expect(runtimeRequest.mock.calls[0][0]).not.toHaveProperty('selected_machine_id');
+  });
+
+  it('sends no session_id on the first copilot runtime submit', async () => {
+    const runtimeRequest = vi.fn(async () => ({
+      status: 'success' as const,
+      source: 'runtime' as const,
+      payload: runtimeWorkorderAgentResponse,
+      requestedAt: '2026-06-12T08:00:00.000Z',
+      completedAt: '2026-06-12T08:00:01.000Z',
+      diagnostics: {
+        request_source: 'hoya_ui.copilot_submit',
+        runtime_trace_id: 'trace-runtime-workorder-021',
+        payload_version: '2.0',
+      },
+    }));
+    const previewRequest = vi.fn(async () => previewResponse);
+
+    await requestMaintenanceCopilotAssistantResponse({
+      prompt: 'Investigate BMM26-02465',
+      filters: { status: 'open' },
+      workspaceState: createInitialOperationsWorkspaceState(),
+      selectedWorkorder,
+      sessionId: null,
+      previewRequest,
+      runtimeRequest,
+    });
+
+    expect(runtimeRequest.mock.calls[0][0]).not.toHaveProperty('session_id');
+  });
+
+  it('stores runtime response session_id for the next copilot runtime submit', async () => {
+    const runtimeRequest = vi.fn(async () => ({
+      status: 'success' as const,
+      source: 'runtime' as const,
+      payload: runtimeWorkorderAgentResponse,
+      session_id: 'session-workorder-026b',
+      requestedAt: '2026-06-12T08:00:00.000Z',
+      completedAt: '2026-06-12T08:00:01.000Z',
+      diagnostics: {
+        request_source: 'hoya_ui.copilot_submit',
+        runtime_trace_id: 'trace-runtime-workorder-021',
+        payload_version: '2.0',
+      },
+    }));
+    const previewRequest = vi.fn(async () => previewResponse);
+    let copilotSessionId: string | null = null;
+
+    const firstResponse = await requestMaintenanceCopilotAssistantResponse({
+      prompt: 'Investigate BMM26-02465',
+      filters: { status: 'open' },
+      workspaceState: createInitialOperationsWorkspaceState(),
+      selectedWorkorder,
+      sessionId: copilotSessionId,
+      previewRequest,
+      runtimeRequest,
+    });
+    if (firstResponse.source === 'runtime' && firstResponse.runtimeResult.session_id) {
+      copilotSessionId = firstResponse.runtimeResult.session_id;
+    }
+
+    const secondResponse = await requestMaintenanceCopilotAssistantResponse({
+      prompt: 'Investigate BMM26-02465 next step',
+      filters: { status: 'open' },
+      workspaceState: createInitialOperationsWorkspaceState(),
+      selectedWorkorder,
+      sessionId: copilotSessionId,
+      previewRequest,
+      runtimeRequest,
+    });
+
+    expect(firstResponse.source).toBe('runtime');
+    expect(copilotSessionId).toBe('session-workorder-026b');
+    expect(secondResponse.source).toBe('runtime');
+    expect(runtimeRequest).toHaveBeenCalledTimes(2);
+    expect(runtimeRequest.mock.calls[0][0]).not.toHaveProperty('session_id');
+    expect(runtimeRequest.mock.calls[1][0]).toMatchObject({
+      session_id: 'session-workorder-026b',
+    });
+  });
+
+  it('resets the copilot runtime session when the selected workorder changes', () => {
+    const source = fs.readFileSync('src/pages/maintenance/MaintenanceWorkorderTrackingPage.tsx', 'utf8');
+
+    expect(source).toContain('const copilotSessionIdRef = useRef<string | null>(null);');
+    expect(source).toContain('copilotSessionIdRef.current = null;');
+    expect(source).toContain('}, [selectedWorkorderNo]);');
+  });
+
+  it('does not include session_id in local preview fallback requests', async () => {
+    const runtimeRequest = vi.fn(async () => ({
+      status: 'error' as const,
+      source: 'fallback' as const,
+      errorReason: 'runtime unavailable',
+      requestedAt: '2026-06-12T08:00:00.000Z',
+      completedAt: '2026-06-12T08:00:01.000Z',
+      payload: {},
+      diagnostics: { error_code: 'runtime_error' },
+    }));
+    const previewRequest = vi.fn(async () => previewResponse);
+
+    const response = await requestMaintenanceCopilotAssistantResponse({
+      prompt: 'Investigate BMM26-02465',
+      filters: { status: 'open' },
+      workspaceState: createInitialOperationsWorkspaceState(),
+      selectedWorkorder,
+      sessionId: 'session-workorder-026b',
+      previewRequest,
+      runtimeRequest,
+    });
+
+    expect(response.source).toBe('local_preview');
+    expect(runtimeRequest.mock.calls[0][0]).toMatchObject({
+      session_id: 'session-workorder-026b',
+    });
+    expect(previewRequest).toHaveBeenCalledWith({
+      message: 'Investigate BMM26-02465',
+      filters: { status: 'open' },
+      limit: 5,
+    });
+  });
+
+  it('builds copilot runtime requests with session_id only when provided', () => {
+    const baseRequest = buildMaintenanceCopilotRuntimeRequest({
+      prompt: 'Investigate BMM26-02465',
+      filters: { status: 'open' },
+      workspaceState: createInitialOperationsWorkspaceState(),
+      selectedWorkorder,
+    });
+    const sessionRequest = buildMaintenanceCopilotRuntimeRequest({
+      prompt: 'Investigate BMM26-02465',
+      filters: { status: 'open' },
+      workspaceState: createInitialOperationsWorkspaceState(),
+      selectedWorkorder,
+      sessionId: ' session-workorder-026b ',
+    });
+
+    expect(baseRequest).not.toHaveProperty('session_id');
+    expect(sessionRequest).toMatchObject({
+      session_id: 'session-workorder-026b',
+    });
   });
 
   it('renders the runtime response in chat without local RX1 preview signals', () => {
