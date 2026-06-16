@@ -968,11 +968,12 @@ export async function requestMaintenanceCopilotAssistantResponse({
   filters,
   workspaceState,
   selectedWorkorder,
+  sessionId,
   previewRequest,
   runtimeRequest,
 }: MaintenanceCopilotAssistantResponseInput): Promise<MaintenanceCopilotAssistantResponse> {
   const runtimeRequestPayload = shouldRouteCopilotPromptToRuntime({ prompt, workspaceState, selectedWorkorder })
-    ? buildMaintenanceCopilotRuntimeRequest({ prompt, filters, workspaceState, selectedWorkorder })
+    ? buildMaintenanceCopilotRuntimeRequest({ prompt, filters, workspaceState, selectedWorkorder, sessionId })
     : null;
 
   if (runtimeRequestPayload) {

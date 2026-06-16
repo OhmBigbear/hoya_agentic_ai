@@ -351,6 +351,7 @@ describe('workorder widget developer preview', () => {
     });
 
     expect(firstResponse.source).toBe('runtime');
+    expect(firstResponse.source === 'runtime' ? firstResponse.runtimeResult.session_id : undefined).toBe('session-workorder-026b');
     expect(copilotSessionId).toBe('session-workorder-026b');
     expect(secondResponse.source).toBe('runtime');
     expect(runtimeRequest).toHaveBeenCalledTimes(2);
