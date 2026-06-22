@@ -19,6 +19,7 @@ import type { UiWidget } from '../src/ui-registry';
 import {
   fullWorkorderAgentPayload,
   runtimeWorkorderAgentResponse,
+  spec027hLegacyCompatibleRuntimeResponse,
   unsafeRuntimeWorkorderAgentResponse,
   unknownWidgetRuntimeWorkorderAgentResponse,
 } from './fixtures/ui-registry/workorder-agent-payload.fixture';
@@ -499,6 +500,29 @@ describe('workorder agent payload adapter', () => {
 
     expect(normalized.rejectedWidgets).toHaveLength(2);
     expect(normalized.runtimeDiagnostics.map((diagnostic) => diagnostic.code)).toContain('runtime_widget_rejected');
+    expect(widgets.some((widget) => widget.id === 'runtime-unsafe-widget')).toBe(false);
+    expect(widgets.some((widget) => widget.id === 'runtime-bad-version')).toBe(false);
+    assertAllWidgetsValid(widgets);
+  });
+
+  it('still rejects unknown runtime widgets when additive SPEC-027H fields are present', () => {
+    const payload = {
+      ...unknownWidgetRuntimeWorkorderAgentResponse,
+      ...spec027hLegacyCompatibleRuntimeResponse,
+      widgets: unknownWidgetRuntimeWorkorderAgentResponse.widgets,
+    };
+    const normalized = normalizeWorkorderAgentPayload(payload);
+    const widgets = adaptWorkorderAgentPayloadToWidgets(payload);
+
+    expect(normalized.rejectedWidgets).toHaveLength(2);
+    expect(normalized.runtimeDiagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'runtime_widget_rejected',
+          severity: 'warning',
+        }),
+      ]),
+    );
     expect(widgets.some((widget) => widget.id === 'runtime-unsafe-widget')).toBe(false);
     expect(widgets.some((widget) => widget.id === 'runtime-bad-version')).toBe(false);
     assertAllWidgetsValid(widgets);

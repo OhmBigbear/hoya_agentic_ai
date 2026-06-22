@@ -24,6 +24,7 @@ import {
   agenticCoreWorkspaceRuntimeResponse,
   agenticCoreWorkspaceRuntimeResponseV1Alias,
   runtimeWorkorderAgentResponse,
+  spec027hStructuredTriageOnlyRuntimeResponse,
   unsafeRuntimeWorkorderAgentResponse,
 } from './fixtures/ui-registry/workorder-agent-payload.fixture';
 import {
@@ -299,6 +300,19 @@ describe('workorder agent runtime API', () => {
       payload_version: '1.0',
     });
     expect(result.diagnostics.error_code).toBeUndefined();
+  });
+
+  it('accepts SPEC-027H additive runtime envelopes without legacy widgets', () => {
+    const parsed = parseWorkorderRuntimeResponse(spec027hStructuredTriageOnlyRuntimeResponse, {
+      client_trace_id: 'client-trace-spec027h-triage',
+    });
+
+    expect(parsed.ok).toBe(true);
+    expect(parsed.payload).toEqual(spec027hStructuredTriageOnlyRuntimeResponse);
+    expect(parsed.diagnostics).toMatchObject({
+      runtime_trace_id: 'trace-spec027h-structured-triage-only',
+      payload_version: '2.7',
+    });
   });
 
   it('handles successful runtime payload envelopes', async () => {

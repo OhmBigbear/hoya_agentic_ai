@@ -29,6 +29,9 @@ import {
   fullWorkorderAgentPayload,
   malformedWorkorderAgentPayload,
   runtimeWorkorderAgentResponse,
+  spec027hLegacyCompatibleRuntimeResponse,
+  spec027hSynthesisOnlyRuntimeResponse,
+  spec027hStructuredTriageOnlyRuntimeResponse,
   unsupportedActionWorkorderAgentPayload,
 } from './fixtures/ui-registry/workorder-agent-payload.fixture';
 
@@ -569,6 +572,34 @@ describe('workorder widget developer preview', () => {
     expect(markup).not.toContain('Runtime trace: trace-fast-path-cost-intelligence-023');
     expect(markup).not.toContain('data-testid="maintenance-copilot-local-preview-badge"');
     expect(markup).not.toContain('Local preview response');
+  });
+
+  it('keeps legacy summary.text ahead of additive SPEC-027H synthesis fields', () => {
+    const payload = {
+      ...spec027hLegacyCompatibleRuntimeResponse,
+      summary: {
+        ...spec027hLegacyCompatibleRuntimeResponse.summary,
+        text: '## Legacy Summary Text\nLegacy summary text remains the first assistant fallback.',
+      },
+    };
+    const content = extractRuntimeAssistantText(payload);
+
+    expect(content).toContain('Legacy Summary Text');
+    expect(content).not.toContain('SPEC-027H synthesis should not override legacy summary.text');
+  });
+
+  it('renders assistant text from SPEC-027H-only synthesis summary when legacy fields are absent', () => {
+    const content = extractRuntimeAssistantText(spec027hSynthesisOnlyRuntimeResponse);
+
+    expect(content).toContain('SPEC-027H Synthesis');
+    expect(content).toContain('Team synthesis summary for the selected maintenance context.');
+  });
+
+  it('renders assistant text from SPEC-027H structured_triage when synthesis and legacy fields are absent', () => {
+    const content = extractRuntimeAssistantText(spec027hStructuredTriageOnlyRuntimeResponse);
+
+    expect(content).toContain('Structured triage isolated a likely repeat-failure pattern on the selected equipment.');
+    expect(content).not.toContain('Runtime workorder analysis is ready.');
   });
 
   it('rejects stale or secondary fallback responses after a successful runtime submit', () => {

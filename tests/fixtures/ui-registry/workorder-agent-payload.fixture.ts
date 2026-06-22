@@ -563,6 +563,81 @@ export const unknownWidgetRuntimeWorkorderAgentResponse = {
   ],
 };
 
+export const spec027hLegacyCompatibleRuntimeResponse = {
+  ...runtimeWorkorderAgentResponse,
+  structured_triage: {
+    summary: 'Structured triage found concentrated repeat failure risk on POLISHING-7A.',
+    reasoning: [
+      'Recent corrective workorders cluster on the same equipment.',
+      'Spare-part pressure remains elevated.',
+    ],
+  },
+  execution_plan: {
+    steps: [
+      { id: 'step-1', title: 'Review selected workorder context' },
+    ],
+  },
+  governance: {
+    advisory_only: true,
+  },
+  execution: {
+    mode: 'read_only',
+  },
+  aggregation: {
+    summary: 'Aggregated evidence aligns to POLISHING-7A and the selected workorder.',
+  },
+  synthesis: {
+    summary: {
+      text: 'SPEC-027H synthesis should not override legacy summary.text when both are present.',
+    },
+  },
+  routing_diagnostics: {
+    selected_path: 'multi_agent_planning_runtime',
+  },
+};
+
+export const spec027hSynthesisOnlyRuntimeResponse = {
+  payload_version: '2.7',
+  payload_type: 'workorder_agent_response',
+  intent: 'workorder_insight',
+  trace_metadata: {
+    trace_id: 'trace-spec027h-synthesis-only',
+    agent_id: 'agentic-core-team-runtime',
+    run_id: 'run-spec027h-synthesis-only',
+    payload_version: '2.7',
+  },
+  synthesis: {
+    summary: {
+      markdown: '## SPEC-027H Synthesis\nTeam synthesis summary for the selected maintenance context.',
+    },
+  },
+  routing_diagnostics: {
+    selected_path: 'team_runtime',
+  },
+};
+
+export const spec027hStructuredTriageOnlyRuntimeResponse = {
+  payload_version: '2.7',
+  payload_type: 'workorder_agent_response',
+  intent: 'workorder_insight',
+  trace_metadata: {
+    trace_id: 'trace-spec027h-structured-triage-only',
+    agent_id: 'agentic-core-team-runtime',
+    run_id: 'run-spec027h-structured-triage-only',
+    payload_version: '2.7',
+  },
+  structured_triage: {
+    summary: 'Structured triage isolated a likely repeat-failure pattern on the selected equipment.',
+    reasoning: [
+      'The selected workorder overlaps with recent unresolved corrective work.',
+      'The same machine remains exposed to downtime risk.',
+    ],
+  },
+  governance: {
+    advisory_only: true,
+  },
+};
+
 export const htmlInjectionWorkorderAgentPayload = {
   workspace_payload: {
     payload_version: '1.0',

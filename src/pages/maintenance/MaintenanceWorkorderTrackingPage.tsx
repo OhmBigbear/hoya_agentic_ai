@@ -1032,20 +1032,76 @@ export function extractRuntimeNarrative(payload: unknown): unknown {
 export function extractRuntimeAssistantText(payload: unknown): string {
   const record = getRecord(payload);
   const workspacePayload = getRecord(record?.workspace_payload);
-  const candidate = workspacePayload ?? record;
-  const summary = getRecord(candidate?.summary);
-  const narrative = getRecord(candidate?.narrative);
-  const narrativeText = getText(candidate?.narrative);
+  const topLevelSummary = getRecord(record?.summary);
+  const workspaceSummary = getRecord(workspacePayload?.summary);
+  const narrative = getRecord(record?.narrative ?? workspacePayload?.narrative);
+  const topLevelNarrativeText = getText(record?.narrative);
+  const workspaceNarrativeText = getText(workspacePayload?.narrative);
   const narrativeSectionText = narrative ? formatNarrativeSectionsAsMarkdown(narrative.sections) : undefined;
-  const summaryText = getText(summary?.text ?? summary?.body ?? summary?.markdown);
-  const headline = getText(summary?.headline);
+  const topLevelSummaryText = getText(topLevelSummary?.text ?? topLevelSummary?.body ?? topLevelSummary?.markdown);
+  const workspaceSummaryText = getText(workspaceSummary?.text ?? workspaceSummary?.body ?? workspaceSummary?.markdown);
+  const topLevelHeadline = getText(topLevelSummary?.headline);
+  const workspaceHeadline = getText(workspaceSummary?.headline);
   const executiveSummary = getText(narrative?.executive_summary ?? narrative?.executiveSummary);
-  const title = getText(summary?.title);
+  const synthesis = getRecord(record?.synthesis);
+  const synthesisSummary = getRecord(synthesis?.summary);
+  const synthesisText = getText(
+    synthesisSummary?.text
+      ?? synthesisSummary?.body
+      ?? synthesisSummary?.markdown
+      ?? synthesis?.text
+      ?? synthesis?.body
+      ?? synthesis?.markdown
+      ?? synthesis?.summary,
+  );
+  const structuredTriage = getRecord(record?.structured_triage);
+  const structuredTriageSummary = getText(
+    structuredTriage?.summary
+      ?? structuredTriage?.text
+      ?? structuredTriage?.body
+      ?? structuredTriage?.markdown,
+  );
+  const structuredTriageReasoning = getStructuredReasoningText(structuredTriage?.reasoning);
+  const aggregation = getRecord(record?.aggregation);
+  const aggregationSummary = getText(
+    aggregation?.summary
+      ?? aggregation?.text
+      ?? aggregation?.body
+      ?? aggregation?.markdown,
+  );
+  const title = getText(topLevelSummary?.title ?? workspaceSummary?.title);
   const lines = [
-    narrativeSectionText ?? narrativeText ?? summaryText ?? headline ?? executiveSummary ?? title ?? 'Runtime workorder analysis is ready.',
+    topLevelSummaryText
+      ?? workspaceSummaryText
+      ?? narrativeSectionText
+      ?? topLevelNarrativeText
+      ?? workspaceNarrativeText
+      ?? topLevelHeadline
+      ?? workspaceHeadline
+      ?? executiveSummary
+      ?? synthesisText
+      ?? structuredTriageSummary
+      ?? structuredTriageReasoning
+      ?? aggregationSummary
+      ?? title
+      ?? 'Runtime workorder analysis is ready.',
   ].filter(Boolean);
 
   return lines.join('\n\n');
+}
+
+function getStructuredReasoningText(value: unknown): string | undefined {
+  const directText = getText(value);
+  if (directText) {
+    return directText;
+  }
+
+  const items = getTextItems(value);
+  if (items.length > 0) {
+    return items.join('\n');
+  }
+
+  return undefined;
 }
 
 const mainRuntimeRegionOrder = [

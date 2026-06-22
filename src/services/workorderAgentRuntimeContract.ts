@@ -172,6 +172,13 @@ export function parseWorkorderRuntimeResponse(
       || Array.isArray(record.readonly_actions)
       || record.summary
       || record.narrative
+      || record.structured_triage
+      || record.execution_plan
+      || record.governance
+      || record.execution
+      || record.aggregation
+      || record.synthesis
+      || record.routing_diagnostics
       || Array.isArray(record.diagnostics)
     )
   );
