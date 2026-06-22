@@ -21,7 +21,11 @@ import {
   buildReliabilityMttrQuery,
   buildRepeatFailuresQuery,
 } from '../src/server/maintenance/repositories/maintenanceAnalyticsRepository.mjs';
-import { buildStockRiskQuery } from '../src/server/maintenance/repositories/maintenanceInventoryRepository.mjs';
+import {
+  buildMaintenancePartCostQuery,
+  buildSparePartRiskQuery,
+  buildStockRiskQuery,
+} from '../src/server/maintenance/repositories/maintenanceInventoryRepository.mjs';
 import {
   buildRcaRelatedHistoryQuery,
   buildRcaWorkorderBaseQuery,
@@ -89,6 +93,24 @@ function testQueryBuilders() {
   const stock = buildStockRiskQuery({ catalogue_no: 'BRG-01', stock_risk: 'zero_stock' });
   assert.match(stock.text, /maintenance\.v_stock_risk_summary/);
   assert.deepEqual(stock.values.slice(0, 2), ['BRG-01', 'zero_stock']);
+
+  const maintenancePartCost = buildMaintenancePartCostQuery({
+    workorder_no: 'WO-1001',
+    machine_no: 'MC-01',
+    period_month: '2026-06-01',
+    section: 'MC1',
+    machine_type: 'GRINDER',
+    limit: 25,
+    offset: 5,
+  });
+  assert.match(maintenancePartCost.text, /maintenance\.v_spare_part_usage_by_workorder usage/);
+  assert.match(maintenancePartCost.text, /LEFT JOIN maintenance\.part_catalog part/);
+  assert.deepEqual(maintenancePartCost.values, ['WO-1001', 'MC-01', '2026-06-01', 'MC1', 'GRINDER', 25, 5]);
+
+  const sparePartRisk = buildSparePartRiskQuery({ catalogue_no: 'BRG-01', query: 'BMM26', limit: 25, offset: 2 });
+  assert.match(sparePartRisk.text, /maintenance\.v_stock_risk_summary/);
+  assert.match(sparePartRisk.text, /ILIKE/);
+  assert.deepEqual(sparePartRisk.values, ['BRG-01', '%BMM26%', 25, 2]);
 
   const frequency = buildFailureFrequencyQuery({
     site: "HOYA-BKK' OR 1=1 --",
@@ -331,6 +353,39 @@ async function testRoutes() {
       async listStockRisk() {
         return { data: [{ catalogue_no: 'BRG-01', stock_risk: 'zero_stock' }], total: 1, limit: 50, offset: 0 };
       },
+      async listMaintenancePartCost(filters) {
+        calls.push(['listMaintenancePartCost', filters]);
+        return {
+          data: [{
+            workorder_no: 'WO-1001',
+            machine_no: 'MC-01',
+            catalogue_no: 'BRG-01',
+            estimated_part_cost: 1250,
+          }],
+          total: 1,
+          limit: 25,
+          offset: 0,
+          metadata: { source_view: 'maintenance.v_spare_part_usage_by_workorder' },
+          evidence_refs: [],
+          warnings: [],
+        };
+      },
+      async listSparePartRisk(filters) {
+        calls.push(['listSparePartRisk', filters]);
+        return {
+          data: [{
+            catalogue_no: 'BRG-01',
+            part_name: 'Bearing',
+            stock_risk: 'zero_stock',
+          }],
+          total: 1,
+          limit: 25,
+          offset: 0,
+          metadata: { source_view: 'maintenance.v_stock_risk_summary' },
+          evidence_refs: [],
+          warnings: [],
+        };
+      },
       async getDashboardSummary() {
         return { open_workorder_count: 1, overdue_workorder_count: 0, on_hold_workorder_count: 0, completed_workorder_count: 1 };
       },
@@ -380,6 +435,8 @@ async function testRoutes() {
   assert.deepEqual(matchRoute('/api/maintenance/analytics/failure-frequency'), { name: 'failureFrequency', params: {} });
   assert.deepEqual(matchRoute('/api/maintenance/analytics/failure-pareto'), { name: 'failurePareto', params: {} });
   assert.deepEqual(matchRoute('/api/maintenance/analytics/rca-evidence'), { name: 'rcaEvidence', params: {} });
+  assert.deepEqual(matchRoute('/api/maintenance/analytics/maintenance-part-cost'), { name: 'maintenancePartCost', params: {} });
+  assert.deepEqual(matchRoute('/api/maintenance/analytics/spare-part-risk'), { name: 'sparePartRisk', params: {} });
 
   const rcaMissing = await invoke(router, '/api/maintenance/analytics/rca-evidence');
   assert.equal(rcaMissing.statusCode, 400);
@@ -420,6 +477,38 @@ async function testRoutes() {
   assert.equal(repeatEndpoint.body.data[0].workorder_count, 2);
   assert.equal(repeatEndpoint.body.data[0].total_downtime_hours, 4);
   assert.deepEqual(repeatEndpoint.body.data[0].workorders, ['WO-1001', 'WO-0999']);
+
+  const maintenancePartCostEndpoint = await invoke(router, '/api/maintenance/analytics/maintenance-part-cost?workorder_no=WO-1001&machine_no=MC-01&period_month=2026-06-01&section=MC1&machine_type=GRINDER&limit=25&offset=0');
+  assert.equal(maintenancePartCostEndpoint.statusCode, 200);
+  assert.equal(maintenancePartCostEndpoint.body.status, 'success');
+  assert.equal(maintenancePartCostEndpoint.body.count, 1);
+  assert.equal(maintenancePartCostEndpoint.body.metadata.source_view, 'maintenance.v_spare_part_usage_by_workorder');
+  assert.deepEqual(maintenancePartCostEndpoint.body.evidence_refs, []);
+  assert.equal(maintenancePartCostEndpoint.body.data[0].workorder_no, 'WO-1001');
+  assert.equal(maintenancePartCostEndpoint.body.data[0].machine_no, 'MC-01');
+  assert.deepEqual(calls.at(-1), ['listMaintenancePartCost', {
+    workorder_no: 'WO-1001',
+    machine_no: 'MC-01',
+    period_month: '2026-06-01',
+    section: 'MC1',
+    machine_type: 'GRINDER',
+    limit: '25',
+    offset: '0',
+  }]);
+
+  const sparePartRiskEndpoint = await invoke(router, '/api/maintenance/analytics/spare-part-risk?catalogue_no=BRG-01&query=BMM26&limit=25&offset=0');
+  assert.equal(sparePartRiskEndpoint.statusCode, 200);
+  assert.equal(sparePartRiskEndpoint.body.status, 'success');
+  assert.equal(sparePartRiskEndpoint.body.count, 1);
+  assert.equal(sparePartRiskEndpoint.body.metadata.source_view, 'maintenance.v_stock_risk_summary');
+  assert.deepEqual(sparePartRiskEndpoint.body.evidence_refs, []);
+  assert.equal(sparePartRiskEndpoint.body.data[0].catalogue_no, 'BRG-01');
+  assert.deepEqual(calls.at(-1), ['listSparePartRisk', {
+    catalogue_no: 'BRG-01',
+    query: 'BMM26',
+    limit: '25',
+    offset: '0',
+  }]);
 
   const failureRouter = createMaintenanceRouter({
     workorderService: {

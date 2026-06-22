@@ -57,6 +57,16 @@ export function createMaintenanceAnalyticsService(analyticsRepository, inventory
       return { ...result, data: result.rows.map(riskMachineDto) };
     },
 
+    async listMaintenancePartCost(filters) {
+      const result = await inventoryRepository.listMaintenancePartCost(filters);
+      return { ...result, data: result.rows.map(maintenancePartCostDto) };
+    },
+
+    async listSparePartRisk(filters) {
+      const result = await inventoryRepository.listSparePartRisk(filters);
+      return { ...result, data: result.rows.map(riskMachineDto) };
+    },
+
     async getDashboardSummary(filters) {
       const row = await analyticsRepository.getDashboardSummary(filters);
       return dashboardSummaryDto(row);
@@ -146,4 +156,61 @@ function rcaEvidenceWarnings({ tasks, parts, holdHistory, relatedHistory, includ
     warnings.push('No related machine history was found for this evidence request.');
   }
   return warnings;
+}
+
+function maintenancePartCostDto(row) {
+  return {
+    workorder_no: row.workorder_no ? String(row.workorder_no) : '',
+    machine_no: stringOrUndefined(row.machine_no),
+    machine_desc: stringOrUndefined(row.machine_desc),
+    period_month: dateOnlyString(row.period_month),
+    section: stringOrUndefined(row.section),
+    machine_type: stringOrUndefined(row.machine_type),
+    catalogue_no: stringOrUndefined(row.catalogue_no),
+    part_name: stringOrUndefined(row.part_name),
+    uom: stringOrUndefined(row.uom),
+    issued_qty: numberOrZero(row.issued_qty),
+    movement_qty: numberOrZero(row.movement_qty),
+    transaction_count: numberOrZero(row.transaction_count),
+    unit_cost: numberOrUndefined(row.unit_cost),
+    estimated_part_cost: numberOrZero(row.estimated_part_cost),
+    workorder_material_cost: numberOrUndefined(row.workorder_material_cost),
+    first_transaction_at: dateString(row.first_transaction_at),
+    last_transaction_at: dateString(row.last_transaction_at),
+  };
+}
+
+function numberOrZero(value) {
+  return numberOrUndefined(value) ?? 0;
+}
+
+function numberOrUndefined(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function stringOrUndefined(value) {
+  return value === undefined || value === null || value === '' ? undefined : String(value);
+}
+
+function dateString(value) {
+  if (!value) {
+    return undefined;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function dateOnlyString(value) {
+  if (!value) {
+    return undefined;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString().slice(0, 10);
 }

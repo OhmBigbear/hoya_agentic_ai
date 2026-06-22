@@ -101,6 +101,16 @@ export function createMaintenanceRouter({ workorderService, analyticsService }) 
         return sendEnvelope(response, result.data, result);
       }
 
+      if (match.name === 'maintenancePartCost') {
+        const result = await analyticsService.listMaintenancePartCost(query);
+        return sendReadonlyAnalyticsEnvelope(response, result);
+      }
+
+      if (match.name === 'sparePartRisk') {
+        const result = await analyticsService.listSparePartRisk(query);
+        return sendReadonlyAnalyticsEnvelope(response, result);
+      }
+
       if (match.name === 'dashboardSummary') {
         const summary = await analyticsService.getDashboardSummary(query);
         return sendEnvelope(response, summary);
@@ -148,6 +158,12 @@ export function matchRoute(pathname) {
   if (pathname === '/api/maintenance/analytics/stock-risk') {
     return { name: 'stockRisk', params: {} };
   }
+  if (pathname === '/api/maintenance/analytics/maintenance-part-cost') {
+    return { name: 'maintenancePartCost', params: {} };
+  }
+  if (pathname === '/api/maintenance/analytics/spare-part-risk') {
+    return { name: 'sparePartRisk', params: {} };
+  }
   if (pathname === '/api/maintenance/dashboard-summary') {
     return { name: 'dashboardSummary', params: {} };
   }
@@ -178,6 +194,17 @@ function sendEnvelope(response, data, meta = {}) {
     offset: meta.offset,
     generated_at: new Date().toISOString(),
     warnings: meta.warnings,
+  });
+}
+
+function sendReadonlyAnalyticsEnvelope(response, result = {}) {
+  return sendJson(response, 200, {
+    status: 'success',
+    data: result.data ?? [],
+    count: result.total ?? 0,
+    metadata: result.metadata ?? {},
+    evidence_refs: result.evidence_refs ?? [],
+    warnings: result.warnings?.length ? result.warnings : undefined,
   });
 }
 
